@@ -124,6 +124,132 @@ class Identity:
             "next_key_digest": next_key_digest,
         }
 
+    def rotate(self) -> dict:
+        """Rotate keys using pre-rotation.
+
+        Activates the pre-committed next key as the new current key,
+        generates a fresh next key, and appends a rotation event to the log.
+
+        Returns the rotation event dict.
+        """
+        # The pre-committed next key becomes current
+        old_pub_b64 = self.public_key_b64()
+        new_priv = self._next_private_key
+        from nacl.signing import SigningKey as _SK
+        new_pub = bytes(_SK(new_priv).verify_key)
+
+        # Generate a fresh next key
+        fresh_next_priv, fresh_next_pub = crypto.generate_keypair()
+
+        # Get the prior event for chaining
+        events = self._store.load_event_log(self.name)
+        prior_event = events[-1]
+        prior_signable = {k: v for k, v in prior_event.items() if k != "signature"}
+        prior_digest = crypto.sha256_digest(canonical_json(prior_signable))
+
+        # Verify that our next key matches the commitment in the prior event
+        expected_digest = prior_event.get("next_keys_digest", "")
+        actual_digest = crypto.sha256_digest(new_pub)
+        if expected_digest != actual_digest:
+            raise ValueError(
+                "Pre-rotation check failed: next key does not match committed digest. "
+                "This identity may be compromised."
+            )
+
+        # Build rotation event
+        new_pub_b64 = base64.b64encode(new_pub).decode("ascii")
+        next_key_digest = crypto.sha256_digest(fresh_next_pub)
+        sequence = len(events)
+
+        rotation = {
+            "agent_id": self.agent_id,
+            "event_type": "rotation",
+            "sequence": sequence,
+            "prior_event_digest": prior_digest,
+            "current_keys": [new_pub_b64],
+            "next_keys_digest": next_key_digest,
+            "alg": crypto.ALG,
+        }
+        # Sign with the NEW key (proves possession of pre-committed key)
+        sig = crypto.sign(canonical_json(rotation), new_priv)
+        rotation["signature"] = base64.b64encode(sig).decode("ascii")
+
+        # Update in-memory state
+        self._private_key = new_priv
+        self.public_key = new_pub
+        self._next_private_key = fresh_next_priv
+        self._next_public_key = fresh_next_pub
+
+        # Persist
+        self._store.save_private_key(self.name, new_priv, "current")
+        self._store.save_private_key(self.name, fresh_next_priv, "next")
+        self._store.append_event(self.name, rotation)
+        self._store.save_identity(self.name, self.to_identity_document())
+
+        return rotation
+
+    def verify_event_log(self) -> list[str]:
+        """Verify the integrity of the key event log.
+
+        Returns a list of error strings (empty = valid).
+        """
+        events = self._store.load_event_log(self.name)
+        errors = []
+
+        if not events:
+            errors.append("No events in log")
+            return errors
+
+        # Check inception
+        inception = events[0]
+        if inception.get("event_type") != "inception":
+            errors.append("First event is not an inception event")
+        if inception.get("sequence") != 0:
+            errors.append("Inception event sequence is not 0")
+
+        # Verify inception signature
+        inc_sig = base64.b64decode(inception.get("signature", ""))
+        inc_pub_b64 = inception.get("current_keys", [""])[0]
+        if inc_pub_b64:
+            inc_pub = base64.b64decode(inc_pub_b64)
+            inc_signable = {k: v for k, v in inception.items() if k != "signature"}
+            if not crypto.verify(canonical_json(inc_signable), inc_sig, inc_pub):
+                errors.append("Inception event signature is invalid")
+
+        # Verify each rotation
+        for i in range(1, len(events)):
+            event = events[i]
+            prev = events[i - 1]
+
+            if event.get("event_type") != "rotation":
+                errors.append(f"Event {i}: expected rotation, got {event.get('event_type')}")
+
+            if event.get("sequence") != i:
+                errors.append(f"Event {i}: sequence mismatch (got {event.get('sequence')})")
+
+            # Verify the prior_event_digest chains to previous event
+            prev_signable = {k: v for k, v in prev.items() if k != "signature"}
+            expected_prior = crypto.sha256_digest(canonical_json(prev_signable))
+            if event.get("prior_event_digest") != expected_prior:
+                errors.append(f"Event {i}: prior_event_digest does not match event {i-1}")
+
+            # Verify that the current key matches the next_keys_digest from previous event
+            cur_pub_b64 = event.get("current_keys", [""])[0]
+            if cur_pub_b64:
+                cur_pub = base64.b64decode(cur_pub_b64)
+                actual_digest = crypto.sha256_digest(cur_pub)
+                expected = prev.get("next_keys_digest", "")
+                if actual_digest != expected:
+                    errors.append(f"Event {i}: current key does not match prior pre-rotation commitment")
+
+                # Verify signature with the current key
+                evt_sig = base64.b64decode(event.get("signature", ""))
+                evt_signable = {k: v for k, v in event.items() if k != "signature"}
+                if not crypto.verify(canonical_json(evt_signable), evt_sig, cur_pub):
+                    errors.append(f"Event {i}: signature is invalid")
+
+        return errors
+
     def to_service_endpoint(self, host: str, port: int, capabilities: list[str]) -> dict:
         """Service endpoint document for discovery."""
         return {

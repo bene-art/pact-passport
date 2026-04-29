@@ -300,6 +300,121 @@ def cmd_trace(args: argparse.Namespace) -> None:
         print()
 
 
+def cmd_rotate(args: argparse.Namespace) -> None:
+    """Rotate an agent's keys using pre-rotation."""
+    from pact.identity import Identity
+
+    store = _get_store()
+    name = _resolve_agent_name(store, args.name)
+    if not name:
+        return
+
+    identity = Identity.load(name, store)
+    old_pub = identity.public_key_b64()[:20]
+
+    try:
+        event = identity.rotate()
+        new_pub = identity.public_key_b64()[:20]
+        print(f"Key rotation complete.")
+        print(f"  Agent:    {name}")
+        print(f"  Agent ID: {identity.agent_id}  (unchanged)")
+        print(f"  Old key:  {old_pub}...")
+        print(f"  New key:  {new_pub}...")
+        print(f"  Sequence: {event['sequence']}")
+        print(f"  Next key committed (pre-rotation)")
+    except ValueError as e:
+        print(f"Rotation failed: {e}")
+        sys.exit(1)
+
+
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Validate agent setup: keys, event log, permissions."""
+    from pact.identity import Identity
+
+    store = _get_store()
+    name = _resolve_agent_name(store, args.name)
+    if not name:
+        return
+
+    print(f"Checking agent '{name}'...\n")
+    issues = []
+    passes = []
+
+    # Check key files exist
+    agent_dir = store._agent_dir(name)
+    priv_path = agent_dir / "private_key.bin"
+    next_path = agent_dir / "next_private_key.bin"
+
+    if priv_path.exists():
+        passes.append("Private key file exists")
+        mode = priv_path.stat().st_mode & 0o777
+        if mode == 0o600:
+            passes.append(f"Private key permissions: {oct(mode)} (correct)")
+        else:
+            issues.append(f"Private key permissions: {oct(mode)} (should be 0o600)")
+            print(f"  Fix: chmod 600 {priv_path}")
+    else:
+        issues.append("Private key file missing")
+
+    if next_path.exists():
+        passes.append("Next (pre-rotation) key file exists")
+        mode = next_path.stat().st_mode & 0o777
+        if mode == 0o600:
+            passes.append(f"Next key permissions: {oct(mode)} (correct)")
+        else:
+            issues.append(f"Next key permissions: {oct(mode)} (should be 0o600)")
+    else:
+        issues.append("Next (pre-rotation) key file missing")
+
+    # Check identity document
+    id_path = agent_dir / "identity.json"
+    if id_path.exists():
+        passes.append("Identity document exists")
+    else:
+        issues.append("Identity document missing")
+
+    # Check event log
+    events = store.load_event_log(name)
+    if events:
+        passes.append(f"Event log: {len(events)} event(s)")
+
+        # Verify event log integrity
+        identity = Identity.load(name, store)
+        log_errors = identity.verify_event_log()
+        if not log_errors:
+            passes.append("Event log integrity: all signatures valid")
+            passes.append("Event log chain: all digests match")
+        else:
+            for err in log_errors:
+                issues.append(f"Event log: {err}")
+    else:
+        issues.append("Event log is empty")
+
+    # Check store structure
+    for subdir in ["capabilities", "receipts", "messages"]:
+        d = agent_dir / subdir
+        if d.exists():
+            count = len(list(d.glob("*.json")))
+            passes.append(f"{subdir}/: {count} file(s)")
+
+    # Check peers
+    peers = store.list_peers()
+    passes.append(f"Known peers: {len(peers)}")
+
+    # Print results
+    for p in passes:
+        print(f"  \033[32m✓\033[0m {p}")
+    for i in issues:
+        print(f"  \033[31m✗\033[0m {i}")
+
+    print()
+    if issues:
+        print(f"\033[31m{len(issues)} issue(s) found.\033[0m")
+        sys.exit(1)
+    else:
+        print(f"\033[32mAll checks passed.\033[0m")
+
+
 def _resolve_agent_name(store: PACTStore, name: str | None) -> str | None:
     """Helper to resolve a single agent name from store."""
     if not name:
@@ -375,6 +490,14 @@ def main() -> None:
     # pact peers
     sub.add_parser("peers", help="List known peers")
 
+    # pact rotate
+    p_rotate = sub.add_parser("rotate", help="Rotate agent keys (pre-rotation)")
+    p_rotate.add_argument("name", nargs="?", default=None, help="Agent name")
+
+    # pact doctor
+    p_doctor = sub.add_parser("doctor", help="Validate agent setup")
+    p_doctor.add_argument("name", nargs="?", default=None, help="Agent name")
+
     # pact grant
     p_grant = sub.add_parser("grant", help="Issue a capability token")
     p_grant.add_argument("holder", help="Holder agent_id")
@@ -417,6 +540,8 @@ def main() -> None:
         "receipts": cmd_receipts,
         "identity": cmd_identity,
         "peers": cmd_peers,
+        "rotate": cmd_rotate,
+        "doctor": cmd_doctor,
         "grant": cmd_grant,
         "revoke": cmd_revoke,
         "caps": cmd_caps,

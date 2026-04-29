@@ -171,6 +171,19 @@ class PACTAgent:
                         )
                         return res.to_dict()
 
+                # Check max_invocations rate limit
+                max_inv = self._get_max_invocations(token)
+                if max_inv is not None:
+                    count = self._invocation_counts.get(token.cap_id, 0)
+                    if count >= max_inv:
+                        res = build_res(
+                            identity._private_key, identity.agent_id, msg,
+                            status="error",
+                            fault={"code": "rate_limited", "detail": f"max_invocations ({max_inv}) exceeded for cap {token.cap_id}"},
+                        )
+                        return res.to_dict()
+                    self._invocation_counts[token.cap_id] = count + 1
+
                 action = token.action
             else:
                 # Auto-grant: look up action from payload
@@ -316,6 +329,12 @@ class PACTAgent:
         # a capability token if it has a handler for the action.
         # We return None here and the server will dispatch based on payload.action.
         return None
+
+    @staticmethod
+    def _get_max_invocations(token: CapabilityToken) -> int | None:
+        """Get the effective max_invocations from a token's caveats (minimum of all)."""
+        vals = [c.value for c in token.caveats if c.restrict == "max_invocations"]
+        return min(vals) if vals else None
 
     def _evict_expired_cache(self) -> None:
         """Remove expired entries from the idempotency cache."""
