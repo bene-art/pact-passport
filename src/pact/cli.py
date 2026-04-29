@@ -198,6 +198,126 @@ def cmd_identity(args: argparse.Namespace) -> None:
     print(json.dumps(doc, indent=2))
 
 
+def cmd_grant(args: argparse.Namespace) -> None:
+    """Issue a capability token to another agent."""
+    from pact.agent import PACTAgent
+    from pact.capability import Caveat
+
+    store = _get_store()
+    name = _resolve_agent_name(store, args.agent)
+    if not name:
+        return
+
+    caveats = []
+    if args.expires:
+        caveats.append(Caveat("expires", args.expires))
+    if args.max_invocations:
+        caveats.append(Caveat("max_invocations", args.max_invocations))
+    if args.no_delegation:
+        caveats.append(Caveat("no_further_delegation", True, terminal=True))
+
+    agent = PACTAgent(name=name, auto_grant=False)
+    token = agent.grant(args.holder, args.action, caveats=caveats or None)
+
+    print(f"Capability issued.")
+    print(f"  cap_id:  {token.cap_id}")
+    print(f"  action:  {token.action}")
+    print(f"  holder:  {token.holder}")
+    if caveats:
+        for c in caveats:
+            print(f"  caveat:  {c.restrict} = {c.value}")
+    print(f"\nShare the cap_id with the holder agent.")
+
+
+def cmd_revoke(args: argparse.Namespace) -> None:
+    """Revoke a capability token."""
+    from pact.agent import PACTAgent
+
+    store = _get_store()
+    name = _resolve_agent_name(store, args.agent)
+    if not name:
+        return
+
+    agent = PACTAgent(name=name, auto_grant=False)
+    if agent.revoke(args.cap_id):
+        print(f"Capability {args.cap_id} revoked.")
+    else:
+        print(f"Capability {args.cap_id} not found.")
+
+
+def cmd_caps(args: argparse.Namespace) -> None:
+    """List issued capability tokens."""
+    store = _get_store()
+    name = _resolve_agent_name(store, args.agent)
+    if not name:
+        return
+
+    caps = store.list_capabilities(name)
+    if not caps:
+        print(f"No capabilities for agent '{name}'.")
+        return
+
+    print(f"{'CAP ID':<20} {'ACTION':<20} {'HOLDER':<25} {'REVOKED'}")
+    print(f"{'-'*20} {'-'*20} {'-'*25} {'-'*8}")
+    for c in caps:
+        cid = c.get("cap_id", "?")[:18]
+        action = c.get("action", "?")
+        holder = c.get("holder", "?")[:23]
+        revoked = "YES" if c.get("revoked") else ""
+        print(f"{cid:<20} {action:<20} {holder:<25} {revoked}")
+
+
+def cmd_trace(args: argparse.Namespace) -> None:
+    """Trace the causal chain for a message."""
+    from pact.agent import PACTAgent
+
+    store = _get_store()
+    name = _resolve_agent_name(store, args.agent)
+    if not name:
+        return
+
+    agent = PACTAgent(name=name)
+    chain = agent.get_causal_chain(args.msg_id)
+    if not chain:
+        print(f"No messages found for ID: {args.msg_id}")
+        return
+
+    print(f"Causal chain ({len(chain)} messages):\n")
+    for i, msg in enumerate(chain):
+        prefix = "  " if i > 0 else ""
+        mtype = msg.get("type", "?")
+        mid = msg.get("id", "?")[:20]
+        intent = msg.get("intent", "")
+        status = msg.get("status", "")
+        refs = msg.get("refs", [])
+        print(f"{prefix}[{mtype}] {mid}...")
+        if intent:
+            print(f"{prefix}  intent: {intent}")
+        if status:
+            print(f"{prefix}  status: {status}")
+        if refs:
+            print(f"{prefix}  refs:   {', '.join(r[:12] + '...' for r in refs)}")
+        print()
+
+
+def _resolve_agent_name(store: PACTStore, name: str | None) -> str | None:
+    """Helper to resolve a single agent name from store."""
+    if not name:
+        agents = store.list_agents()
+        if len(agents) == 1:
+            return agents[0]
+        elif not agents:
+            print("No agents found. Run: pact init <name>")
+            return None
+        else:
+            print(f"Multiple agents: {', '.join(agents)}. Use --agent <name>")
+            return None
+    if not store.has_agent(name):
+        print(f"Agent '{name}' not found. Run: pact init {name}")
+        return None
+    return name
+
+
 def cmd_peers(args: argparse.Namespace) -> None:
     """List known peers."""
     store = _get_store()
@@ -255,6 +375,29 @@ def main() -> None:
     # pact peers
     sub.add_parser("peers", help="List known peers")
 
+    # pact grant
+    p_grant = sub.add_parser("grant", help="Issue a capability token")
+    p_grant.add_argument("holder", help="Holder agent_id")
+    p_grant.add_argument("action", help="Capability action")
+    p_grant.add_argument("--agent", "-a", default=None, help="Issuer agent name")
+    p_grant.add_argument("--expires", default=None, help="Expiry (ISO 8601)")
+    p_grant.add_argument("--max-invocations", type=int, default=None, help="Max invocations")
+    p_grant.add_argument("--no-delegation", action="store_true", help="Prevent further delegation")
+
+    # pact revoke
+    p_revoke = sub.add_parser("revoke", help="Revoke a capability token")
+    p_revoke.add_argument("cap_id", help="Capability ID to revoke")
+    p_revoke.add_argument("--agent", "-a", default=None, help="Agent name")
+
+    # pact caps
+    p_caps = sub.add_parser("caps", help="List issued capabilities")
+    p_caps.add_argument("--agent", "-a", default=None, help="Agent name")
+
+    # pact trace
+    p_trace = sub.add_parser("trace", help="Trace causal chain for a message")
+    p_trace.add_argument("msg_id", help="Message ID to trace")
+    p_trace.add_argument("--agent", "-a", default=None, help="Agent name")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -274,6 +417,10 @@ def main() -> None:
         "receipts": cmd_receipts,
         "identity": cmd_identity,
         "peers": cmd_peers,
+        "grant": cmd_grant,
+        "revoke": cmd_revoke,
+        "caps": cmd_caps,
+        "trace": cmd_trace,
     }
 
     fn = commands.get(args.command)

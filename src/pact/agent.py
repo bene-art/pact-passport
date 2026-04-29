@@ -14,7 +14,7 @@ from zeroconf import Zeroconf
 
 from pact import crypto
 from pact.identity import Identity
-from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability
+from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability, attenuate
 from pact.message import (
     PACTMessage, build_req, build_res, verify_message,
     verify_holder_proof, is_deadline_exceeded,
@@ -63,7 +63,8 @@ class PACTAgent:
         self._server: PACTServer | None = None
         self._zc: Zeroconf | None = None
         self._mdns_info = None
-        self._idempotency_cache: dict[str, dict] = {}
+        self._idempotency_cache: dict[str, tuple[dict, datetime]] = {}  # key → (response, expires)
+        self._invocation_counts: dict[str, int] = {}  # cap_id → count
 
     def _ensure_identity(self) -> Identity:
         """Load or create the agent's identity."""
@@ -127,9 +128,13 @@ class PACTAgent:
             )
             return res.to_dict()
 
-        # Idempotency check
+        # Idempotency check with TTL
         if msg.idempotency_key and msg.idempotency_key in self._idempotency_cache:
-            return self._idempotency_cache[msg.idempotency_key]
+            cached_res, expires_at = self._idempotency_cache[msg.idempotency_key]
+            if datetime.now(timezone.utc) < expires_at:
+                return cached_res
+            else:
+                del self._idempotency_cache[msg.idempotency_key]
 
         # Verify sender identity (fetch from peers cache or via identity exchange)
         sender_pub = self._resolve_sender_key(msg.from_agent)
@@ -207,10 +212,18 @@ class PACTAgent:
         )
         self._store.save_receipt(self.name, receipt)
 
-        # Cache for idempotency
+        # Cache for idempotency with TTL based on deadline
         result_dict = res.to_dict()
         if msg.idempotency_key:
-            self._idempotency_cache[msg.idempotency_key] = result_dict
+            ttl = timedelta(seconds=60)  # default 60s TTL
+            if msg.deadline:
+                try:
+                    deadline_dt = datetime.fromisoformat(msg.deadline)
+                    ttl = max(deadline_dt - datetime.now(timezone.utc), timedelta(seconds=10))
+                except ValueError:
+                    pass
+            self._idempotency_cache[msg.idempotency_key] = (result_dict, datetime.now(timezone.utc) + ttl)
+            self._evict_expired_cache()
 
         return result_dict
 
@@ -303,6 +316,55 @@ class PACTAgent:
         # a capability token if it has a handler for the action.
         # We return None here and the server will dispatch based on payload.action.
         return None
+
+    def _evict_expired_cache(self) -> None:
+        """Remove expired entries from the idempotency cache."""
+        now = datetime.now(timezone.utc)
+        expired = [k for k, (_, exp) in self._idempotency_cache.items() if now >= exp]
+        for k in expired:
+            del self._idempotency_cache[k]
+
+    def grant(
+        self,
+        holder_id: str,
+        action: str,
+        caveats: list[Caveat] | None = None,
+    ) -> CapabilityToken:
+        """Issue a capability token to another agent."""
+        identity = self._ensure_identity()
+        token = issue_capability(
+            identity._private_key, identity.agent_id, holder_id, action,
+            caveats=caveats,
+        )
+        self._store.save_capability(self.name, token.to_dict())
+        return token
+
+    def revoke(self, cap_id: str) -> bool:
+        """Revoke a previously issued capability."""
+        cap_dict = self._store.load_capability(self.name, cap_id)
+        if not cap_dict:
+            return False
+        cap_dict["revoked"] = True
+        self._store.save_capability(self.name, cap_dict)
+        return True
+
+    def get_causal_chain(self, msg_id: str) -> list[dict]:
+        """Walk the message DAG backwards from msg_id to reconstruct causal history."""
+        chain = []
+        visited = set()
+        queue = [msg_id]
+        while queue:
+            current_id = queue.pop(0)
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+            msg = self._store.load_message(self.name, current_id)
+            if msg:
+                chain.append(msg)
+                for ref in msg.get("refs", []):
+                    if ref not in visited:
+                        queue.append(ref)
+        return chain
 
     def discover(self, timeout: float = 3.0) -> list[dict]:
         """Discover PACT agents on the local network."""

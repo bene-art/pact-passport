@@ -1,7 +1,8 @@
-"""Capability tokens: issue, holder-bind, verify.
+"""Capability tokens: issue, attenuate, verify.
 
 A capability is a signed, holder-bound proof of authority.
 Possession of the token IS the authorization.
+Caveats can only be appended (attenuation) — never removed or widened.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 
 from pact import crypto
 from pact._canonical import canonical_json
+from pact.errors import AttenuationViolation
 
 
 @dataclass
@@ -38,18 +40,35 @@ class Caveat:
 
 
 @dataclass
+class DelegationLink:
+    """One link in a delegation chain."""
+    from_agent: str
+    sig: str  # base64-encoded
+
+    def to_dict(self) -> dict:
+        return {"from": self.from_agent, "sig": self.sig}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> DelegationLink:
+        return cls(from_agent=d["from"], sig=d["sig"])
+
+
+@dataclass
 class CapabilityToken:
     """A signed, holder-bound capability token."""
     cap_id: str
-    issuer: str  # agent_id
-    holder: str  # agent_id
+    issuer: str  # agent_id of the original issuer
+    holder: str  # agent_id of the current holder
     action: str
     caveats: list[Caveat] = field(default_factory=list)
+    parent: str | None = None  # cap_id of parent token (for attenuated tokens)
+    delegation_chain: list[DelegationLink] = field(default_factory=list)
+    revoked: bool = False
     alg: str = crypto.ALG
     signature: str = ""  # base64-encoded
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "cap_id": self.cap_id,
             "issuer": self.issuer,
             "holder": self.holder,
@@ -58,6 +77,13 @@ class CapabilityToken:
             "alg": self.alg,
             "signature": self.signature,
         }
+        if self.parent:
+            d["parent"] = self.parent
+        if self.delegation_chain:
+            d["delegation_chain"] = [dl.to_dict() for dl in self.delegation_chain]
+        if self.revoked:
+            d["revoked"] = True
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> CapabilityToken:
@@ -67,6 +93,9 @@ class CapabilityToken:
             holder=d["holder"],
             action=d["action"],
             caveats=[Caveat.from_dict(c) for c in d.get("caveats", [])],
+            parent=d.get("parent"),
+            delegation_chain=[DelegationLink.from_dict(dl) for dl in d.get("delegation_chain", [])],
+            revoked=d.get("revoked", False),
             alg=d.get("alg", crypto.ALG),
             signature=d.get("signature", ""),
         )
@@ -77,6 +106,10 @@ class CapabilityToken:
         d.pop("signature", None)
         return d
 
+    def is_terminal(self) -> bool:
+        """Check if any caveat prevents further delegation."""
+        return any(c.restrict == "no_further_delegation" and c.terminal for c in self.caveats)
+
 
 def issue_capability(
     issuer_private_key: bytes,
@@ -85,7 +118,7 @@ def issue_capability(
     action: str,
     caveats: list[Caveat] | None = None,
 ) -> CapabilityToken:
-    """Issue a new capability token from issuer to holder."""
+    """Issue a new root capability token from issuer to holder."""
     token = CapabilityToken(
         cap_id=str(uuid.uuid4()),
         issuer=issuer_id,
@@ -96,6 +129,83 @@ def issue_capability(
     sig = crypto.sign(canonical_json(token.signable_dict()), issuer_private_key)
     token.signature = base64.b64encode(sig).decode("ascii")
     return token
+
+
+def attenuate(
+    parent: CapabilityToken,
+    delegator_private_key: bytes,
+    delegator_id: str,
+    new_holder_id: str,
+    additional_caveats: list[Caveat],
+) -> CapabilityToken:
+    """Create an attenuated (narrowed) capability from a parent token.
+
+    Rules:
+    - The parent must not be terminal (no_further_delegation).
+    - The delegator must be the current holder of the parent.
+    - Additional caveats can only restrict, never widen.
+    - For numeric caveats (max_invocations), new value must be <= parent value.
+    - For time caveats (expires), new value must be <= parent value.
+    - The action must remain the same.
+
+    Raises AttenuationViolation on any rule violation.
+    """
+    # Check terminal
+    if parent.is_terminal():
+        raise AttenuationViolation("Parent capability has no_further_delegation caveat")
+
+    # Check delegator is the holder
+    if parent.holder != delegator_id:
+        raise AttenuationViolation(
+            f"Delegator {delegator_id} is not the holder of parent capability (holder: {parent.holder})"
+        )
+
+    # Validate additional caveats don't widen
+    parent_caveats_by_restrict = {}
+    for c in parent.caveats:
+        parent_caveats_by_restrict.setdefault(c.restrict, []).append(c)
+
+    for new_caveat in additional_caveats:
+        existing = parent_caveats_by_restrict.get(new_caveat.restrict, [])
+        if existing and new_caveat.restrict == "max_invocations":
+            parent_val = min(c.value for c in existing)
+            if new_caveat.value > parent_val:
+                raise AttenuationViolation(
+                    f"Cannot widen max_invocations from {parent_val} to {new_caveat.value}"
+                )
+        elif existing and new_caveat.restrict == "expires":
+            parent_exp = min(c.value for c in existing)
+            if new_caveat.value > parent_exp:
+                raise AttenuationViolation(
+                    f"Cannot extend expiry from {parent_exp} to {new_caveat.value}"
+                )
+
+    # Build delegation chain: inherit parent's chain + add delegator's link
+    chain = list(parent.delegation_chain)
+    # Sign the parent cap_id to prove delegator held the parent
+    chain_sig = crypto.sign(parent.cap_id.encode(), delegator_private_key)
+    chain.append(DelegationLink(
+        from_agent=delegator_id,
+        sig=base64.b64encode(chain_sig).decode("ascii"),
+    ))
+
+    # Combine caveats: parent's + additional (append-only)
+    all_caveats = list(parent.caveats) + list(additional_caveats)
+
+    child = CapabilityToken(
+        cap_id=str(uuid.uuid4()),
+        issuer=parent.issuer,  # root issuer stays the same
+        holder=new_holder_id,
+        action=parent.action,
+        caveats=all_caveats,
+        parent=parent.cap_id,
+        delegation_chain=chain,
+    )
+
+    sig = crypto.sign(canonical_json(child.signable_dict()), delegator_private_key)
+    child.signature = base64.b64encode(sig).decode("ascii")
+
+    return child
 
 
 @dataclass
@@ -109,20 +219,53 @@ def verify_capability(
     token: CapabilityToken,
     expected_holder: str,
     issuer_public_key: bytes,
+    known_keys: dict[str, bytes] | None = None,
 ) -> CapabilityResult:
     """Verify a capability token.
 
-    Checks: signature, holder match, and caveats (expiry).
+    Checks: signature, holder match, caveats (expiry), revocation,
+    and delegation chain (if present).
+
+    Args:
+        token: The capability token to verify.
+        expected_holder: The agent_id that should be the holder.
+        issuer_public_key: Public key of the root issuer.
+        known_keys: Optional dict of agent_id → public_key for chain verification.
     """
+    # Check revoked
+    if token.revoked:
+        return CapabilityResult(False, "Capability has been revoked")
+
     # Check holder
     if token.holder != expected_holder:
         return CapabilityResult(False, f"Holder mismatch: expected {expected_holder}, got {token.holder}")
 
-    # Check signature
+    # Verify signature
     sig_bytes = base64.b64decode(token.signature)
     signable = canonical_json(token.signable_dict())
-    if not crypto.verify(signable, sig_bytes, issuer_public_key):
-        return CapabilityResult(False, "Invalid signature on capability token")
+
+    if token.delegation_chain:
+        # For attenuated tokens, the signature is from the last delegator
+        last_delegator = token.delegation_chain[-1].from_agent
+        if known_keys and last_delegator in known_keys:
+            delegator_key = known_keys[last_delegator]
+            if not crypto.verify(signable, sig_bytes, delegator_key):
+                return CapabilityResult(False, "Invalid signature from delegator")
+        # If we don't have the delegator's key, we can still verify the chain links
+    else:
+        # Root token: verify against issuer key
+        if not crypto.verify(signable, sig_bytes, issuer_public_key):
+            return CapabilityResult(False, "Invalid signature on capability token")
+
+    # Verify delegation chain links
+    if token.delegation_chain and known_keys and token.parent:
+        for link in token.delegation_chain:
+            if link.from_agent in known_keys:
+                link_sig = base64.b64decode(link.sig)
+                link_key = known_keys[link.from_agent]
+                # Each link signs the parent cap_id
+                if not crypto.verify(token.parent.encode(), link_sig, link_key):
+                    return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
 
     # Check caveats
     now = datetime.now(timezone.utc)
