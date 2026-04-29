@@ -1,5 +1,7 @@
 # PACT — Protocol for Agent Capability and Trust
 
+[![Tests](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml)
+
 Two message types, holder-bound capabilities, and self-certifying identity. Everything else is built at the edges.
 
 ## What is PACT?
