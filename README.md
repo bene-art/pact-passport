@@ -10,7 +10,7 @@ PACT is a minimal trust protocol for agent-to-agent interaction. It sits **below
 
 1. **Agent Identity** — Ed25519 keypair with self-certifying agent ID and pre-rotation key commitment. Identity survives key rotation without a central registry.
 
-2. **Capability Token** — Signed, holder-bound proof of authority. Caveats can only restrict, never expand. Stolen tokens are useless without the holder's private key.
+2. **Capability Token** — Signed, holder-bound proof of authority with delegation chains. Caveats can only restrict, never expand. Stolen tokens are useless without the holder's private key.
 
 3. **Message** — Two types: REQ (request with capability proof) and RES (result or error). Message references form a causal DAG. Deadlines and idempotency keys are mandatory.
 
@@ -20,6 +20,13 @@ Plus: **unilateral audit receipts** — each agent signs their own view, no coop
 
 ```bash
 pip install pact-protocol
+```
+
+Optional extras:
+```bash
+pip install pact-protocol[cbor]    # CBOR encoding support
+pip install pact-protocol[fast]    # Async uvicorn server
+pip install pact-protocol[lak]     # local-agent-kit integration
 ```
 
 ## Quick Start
@@ -60,35 +67,68 @@ python examples/demo.py
 
 Runs two agents in-process, exchanges a capability-scoped task, and verifies receipts.
 
+## CLI Commands
+
+| Command | Purpose |
+|---------|---------|
+| `pact init <name>` | Create agent identity with pre-rotation key commitment |
+| `pact serve` | Start HTTP server + mDNS broadcast |
+| `pact discover` | Find agents on local network |
+| `pact ask <target> <action> [payload]` | Send a task (auto-handshake on first contact) |
+| `pact grant <holder> <action>` | Issue a capability token |
+| `pact revoke <cap_id>` | Revoke a capability |
+| `pact caps` | List issued capabilities |
+| `pact rotate` | Rotate keys using pre-rotation |
+| `pact doctor` | Validate keys, event log, permissions |
+| `pact trace <msg_id>` | Walk the causal message DAG |
+| `pact receipts` | List audit receipts |
+| `pact identity` | Show public identity document |
+| `pact peers` | List known peers |
+
 ## Architecture
 
 ```
-crypto.py           All PyNaCl in one file (post-quantum swap = one file change)
-identity.py         Ed25519 identity, agent_id derivation, key event log
-capability.py       Token issue, holder-bind, verify, caveats
-message.py          REQ/RES builder, signer, verifier
-receipt.py          Unilateral signed audit receipts
-store.py            Filesystem storage (~/.pact/)
+crypto.py                All PyNaCl in one file (post-quantum swap = one file change)
+identity.py              Ed25519 identity, agent_id, key event log, rotation
+capability.py            Token issue, attenuate, verify, delegation chains
+message.py               REQ/RES builder, signer, verifier
+receipt.py               Unilateral signed audit receipts
+store.py                 Filesystem storage (~/.pact/)
 transport/
-  server.py         HTTP server (single POST endpoint)
-  client.py         HTTP client
-  discovery.py      mDNS via zeroconf
-agent.py            PACTAgent high-level API
-cli.py              `pact` command
+  server.py              HTTP server with CBOR content negotiation
+  async_server.py        Optional async server via uvicorn
+  client.py              HTTP client with CBOR support
+  discovery.py           mDNS via zeroconf
+agent.py                 PACTAgent high-level API
+cli.py                   `pact` command (13 subcommands)
+contrib/
+  lak_channel.py         local-agent-kit integration
 ```
+
+## Features by Phase
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Identity, capabilities, REQ/RES, receipts, mDNS, CLI | Done |
+| 2 | Capability attenuation (A→B→C), explicit grants, idempotency, DAG traversal | Done |
+| 3 | Key rotation, rate limiting (max_invocations), `pact doctor` | Done |
+| 4 | Formal spec (`spec/PACT_v1.md`), deterministic test vectors, interop suite | Done |
+| 5 | CBOR encoding, async uvicorn server, local-agent-kit integration | Done |
 
 ## Tests
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-46 tests covering crypto, identity, capabilities, messages, receipts, storage, HTTP transport, and a full two-agent integration test.
+111 tests covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain, and determinism.
 
 ## Specification
 
-Full protocol specification: [docs/PACT_Specification.md](docs/PACT_Specification.md)
+- **Concept document:** [docs/PACT_Specification.md](docs/PACT_Specification.md)
+- **Formal v1 spec:** [spec/PACT_v1.md](spec/PACT_v1.md) — sufficient for independent implementation
+- **Test vectors:** [tests/vectors/pact_v1_vectors.json](tests/vectors/pact_v1_vectors.json) — deterministic, reproducible
 
 ### Theoretical Foundations
 
