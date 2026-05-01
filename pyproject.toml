@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pact-protocol"
-version = "0.1.0"
+version = "0.1.3"
 description = "Trusted, capability-scoped, auditable agent-to-agent communication"
 readme = "README.md"
 license = {text = "MIT"}
