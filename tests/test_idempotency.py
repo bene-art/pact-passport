@@ -74,18 +74,21 @@ def test_agent_idempotency(store):
     import uuid
     from datetime import datetime, timezone, timedelta
 
-    idem_key = str(uuid.uuid4())
-    msg_dict = PACTMessage(
-        id=str(uuid.uuid4()),
-        type="REQ",
-        from_agent=alice.agent_id,
-        to_agent="any",
+    # Pre-register alice as a peer of the receiving agent so the v0.2
+    # strict verification can succeed.
+    agent._store.save_peer(alice.agent_id, alice.to_identity_document())
+
+    # Use a properly signed REQ instead of skipping verification.
+    from pact.message import build_req
+    req = build_req(
+        from_private_key=alice._private_key,
+        from_id=alice.agent_id,
+        to_id=agent._ensure_identity().agent_id,
         intent="task",
         payload={"action": "count"},
-        deadline=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
-        idempotency_key=idem_key,
-    ).to_dict()
-    msg_dict["signature"] = ""  # skip verification in auto-grant mode
+        deadline_seconds=30,
+    )
+    msg_dict = req.to_dict()
 
     res1 = agent._dispatch(msg_dict)
     res2 = agent._dispatch(msg_dict)
