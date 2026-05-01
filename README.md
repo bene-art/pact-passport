@@ -154,6 +154,7 @@ PACT_CHAOS=1 pytest -v
 - **Concept document:** [docs/PACT_Specification.md](docs/PACT_Specification.md)
 - **Formal v1 spec:** [spec/PACT_v1.md](spec/PACT_v1.md) — sufficient for independent implementation
 - **Test vectors:** [tests/vectors/pact_v1_vectors.json](tests/vectors/pact_v1_vectors.json) — deterministic, reproducible
+- **Case study (v0.1.3):** [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) — what 23 stress experiments found, including 5 real bugs in this implementation
 
 ### Theoretical Foundations
 
