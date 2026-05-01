@@ -1,8 +1,13 @@
 # PACT — Protocol for Agent Capability and Trust
 
 [![Tests](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/pact-protocol)](https://pypi.org/project/pact-protocol/)
+[![Python](https://img.shields.io/pypi/pyversions/pact-protocol)](https://pypi.org/project/pact-protocol/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Two message types, holder-bound capabilities, and self-certifying identity. Everything else is built at the edges.
+A v1 reference implementation of an agent-to-agent trust protocol. Two message types, holder-bound capabilities, and self-certifying identity. Everything else is built at the edges.
+
+> **Status:** v0.1.3 reference implementation. The protocol design is stable; known security and durability gaps from this implementation are tracked in [open issues](https://github.com/bene-art/pact-protocol/issues) for v0.2 hardening. Suitable for experimentation, learning, and as a starting point — not yet for production deployment without addressing the linked issues.
 
 ## What is PACT?
 
@@ -124,7 +129,25 @@ pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-111 tests covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain, and determinism.
+118 tests + 1 documented xfail covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain, determinism, and 5 race-condition scenarios under concurrent dispatch.
+
+### Platform support
+
+| Platform | Status |
+|---|---|
+| **macOS** (Darwin) | 118 passed, 1 xfailed |
+| **Linux** (Alpine on WSL2) | 118 passed, 1 xfailed |
+| **Windows 11** | 114 passed, 4 skipped (POSIX-only checks), 1 xfailed |
+
+The xfail tracks a known peer-cache-staleness bug after key rotation; see [#4](https://github.com/bene-art/pact-protocol/issues/4).
+
+### Concurrency stress mode
+
+Set `PACT_CHAOS=1` to inject random delays at race-prone code paths. Useful for catching idempotency / rate-limit races that would otherwise surface 1-in-1000:
+
+```bash
+PACT_CHAOS=1 pytest -v
+```
 
 ## Specification
 
