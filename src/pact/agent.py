@@ -6,6 +6,7 @@ import base64
 import logging
 import signal
 import sys
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable, Any
@@ -13,6 +14,7 @@ from typing import Callable, Any
 from zeroconf import Zeroconf
 
 from pact import crypto
+from pact._chaos import chaos_sleep
 from pact.identity import Identity
 from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability, attenuate
 from pact.message import (
@@ -65,6 +67,9 @@ class PACTAgent:
         self._mdns_info = None
         self._idempotency_cache: dict[str, tuple[dict, datetime]] = {}  # key → (response, expires)
         self._invocation_counts: dict[str, int] = {}  # cap_id → count
+        # Serializes _handle_task to keep idempotency cache + invocation counter
+        # consistent under ThreadingHTTPServer concurrent dispatch.
+        self._task_lock = threading.Lock()
 
     def _ensure_identity(self) -> Identity:
         """Load or create the agent's identity."""
@@ -119,6 +124,10 @@ class PACTAgent:
 
     def _handle_task(self, msg: PACTMessage, identity: Identity) -> dict:
         """Process a task REQ."""
+        with self._task_lock:
+            return self._handle_task_locked(msg, identity)
+
+    def _handle_task_locked(self, msg: PACTMessage, identity: Identity) -> dict:
         # Check deadline
         if is_deadline_exceeded(msg):
             res = build_res(
@@ -127,6 +136,10 @@ class PACTAgent:
                 fault={"code": "deadline_exceeded", "detail": "Request deadline has passed"},
             )
             return res.to_dict()
+
+        # Chaos hook: widens the idempotency-check + handler-execute window
+        # under PACT_CHAOS=1. Has no effect in normal runs.
+        chaos_sleep()
 
         # Idempotency check with TTL
         if msg.idempotency_key and msg.idempotency_key in self._idempotency_cache:
@@ -174,6 +187,7 @@ class PACTAgent:
                 # Check max_invocations rate limit
                 max_inv = self._get_max_invocations(token)
                 if max_inv is not None:
+                    chaos_sleep()  # widens the read-then-increment window
                     count = self._invocation_counts.get(token.cap_id, 0)
                     if count >= max_inv:
                         res = build_res(
