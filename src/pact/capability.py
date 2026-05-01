@@ -245,27 +245,41 @@ def verify_capability(
     signable = canonical_json(token.signable_dict())
 
     if token.delegation_chain:
-        # For attenuated tokens, the signature is from the last delegator
+        # For attenuated tokens, the signature is from the last delegator.
+        # Fail closed: if we don't have the delegator's pubkey, we cannot
+        # verify the cap. Silently skipping the check (pre-v0.2 behavior)
+        # let forged chains pass — see issue #8.
         last_delegator = token.delegation_chain[-1].from_agent
-        if known_keys and last_delegator in known_keys:
-            delegator_key = known_keys[last_delegator]
-            if not crypto.verify(signable, sig_bytes, delegator_key):
-                return CapabilityResult(False, "Invalid signature from delegator")
-        # If we don't have the delegator's key, we can still verify the chain links
+        if not known_keys or last_delegator not in known_keys:
+            return CapabilityResult(
+                False,
+                f"Cannot verify: missing key for delegator {last_delegator[:24]}...",
+            )
+        delegator_key = known_keys[last_delegator]
+        if not crypto.verify(signable, sig_bytes, delegator_key):
+            return CapabilityResult(False, "Invalid signature from delegator")
     else:
         # Root token: verify against issuer key
         if not crypto.verify(signable, sig_bytes, issuer_public_key):
             return CapabilityResult(False, "Invalid signature on capability token")
 
-    # Verify delegation chain links
-    if token.delegation_chain and known_keys and token.parent:
+    # Verify every delegation chain link. Same fail-closed rule applies:
+    # any link whose key is unknown invalidates the cap. The verifier
+    # cannot trust links it cannot check.
+    if token.delegation_chain and token.parent:
+        if not known_keys:
+            return CapabilityResult(False, "Cannot verify chain: known_keys not provided")
         for link in token.delegation_chain:
-            if link.from_agent in known_keys:
-                link_sig = base64.b64decode(link.sig)
-                link_key = known_keys[link.from_agent]
-                # Each link signs the parent cap_id
-                if not crypto.verify(token.parent.encode(), link_sig, link_key):
-                    return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
+            if link.from_agent not in known_keys:
+                return CapabilityResult(
+                    False,
+                    f"Cannot verify chain link: missing key for {link.from_agent[:24]}...",
+                )
+            link_sig = base64.b64decode(link.sig)
+            link_key = known_keys[link.from_agent]
+            # Each link signs the parent cap_id
+            if not crypto.verify(token.parent.encode(), link_sig, link_key):
+                return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
 
     # Check caveats
     now = datetime.now(timezone.utc)

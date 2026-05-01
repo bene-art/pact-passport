@@ -30,6 +30,11 @@ class PACTMessage:
     payload: dict = field(default_factory=dict)
     status: str | None = None  # "ok" or "error" (RES only)
     fault: dict | None = None  # (RES only)
+    # Trust-on-first-use field. When the receiver doesn't have the sender
+    # in its peer cache, an inline identity_doc lets it verify the sender
+    # ad-hoc: agent_id must derive from the doc's public_key, and the
+    # message signature must verify against that key. Issue #2.
+    identity_doc: dict | None = None
     alg: str = crypto.ALG
     signature: str = ""  # base64-encoded
 
@@ -58,6 +63,8 @@ class PACTMessage:
             d["status"] = self.status
         if self.fault is not None:
             d["fault"] = self.fault
+        if self.identity_doc is not None:
+            d["identity_doc"] = self.identity_doc
         return d
 
     @classmethod
@@ -76,6 +83,7 @@ class PACTMessage:
             payload=d.get("payload", {}),
             status=d.get("status"),
             fault=d.get("fault"),
+            identity_doc=d.get("identity_doc"),
             alg=d.get("alg", crypto.ALG),
             signature=d.get("signature", ""),
         )
@@ -97,6 +105,7 @@ def build_req(
     holder_proof_key: bytes | None = None,
     deadline_seconds: int = 30,
     refs: list[str] | None = None,
+    identity_doc: dict | None = None,
 ) -> PACTMessage:
     """Build and sign a REQ message."""
     msg_id = str(uuid.uuid4())
@@ -113,6 +122,7 @@ def build_req(
         deadline=deadline,
         idempotency_key=str(uuid.uuid4()),
         payload=payload or {},
+        identity_doc=identity_doc,
     )
 
     # Holder proof: sign the message ID with the holder's key

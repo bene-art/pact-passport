@@ -9,7 +9,12 @@
 
 Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Two message types — REQ and RES. Everything else is built at the edges.
 
-> **Status:** v0.1.4 reference implementation. The protocol design is stable; known security and durability gaps from this implementation are tracked in [open issues](https://github.com/bene-art/pact-passport/issues) for v0.2 hardening. Suitable for experimentation, learning, and as a starting point — not yet for production deployment without addressing the linked issues.
+> **Status:** v0.2.0 — security hardening complete. The three critical authorization-bypass paths (issues #2, #3, #8) tracked in v0.1.x are now closed. Remaining v0.2 issues are durability and operational hardening. Suitable for use within a single trust domain (your own machines on a LAN). Production deployment across trust boundaries should still wait until issue #4 (rotation) and #5 (durable idempotency) land.
+
+> **Breaking changes vs v0.1.x:**
+> - `holder_proof` is now mandatory when `cap_id` is present (issue #3)
+> - REQs from unknown peers are rejected unless they include an inline `identity_doc` for trust-on-first-use (issue #2)
+> - `verify_capability` fails closed when delegation chain keys are missing (issue #8)
 
 ## What is PACT Passport?
 

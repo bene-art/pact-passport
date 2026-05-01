@@ -149,9 +149,30 @@ class PACTAgent:
             else:
                 del self._idempotency_cache[msg.idempotency_key]
 
-        # Verify sender identity (fetch from peers cache or via identity exchange)
+        # Verify sender identity. The pre-v0.2 logic silently skipped
+        # verification when sender_pub was None — issue #2's bypass. v0.2:
+        # require either a cached peer pubkey OR a valid inline identity_doc
+        # (trust-on-first-use) and reject otherwise.
         sender_pub = self._resolve_sender_key(msg.from_agent)
-        if sender_pub and not verify_message(msg, sender_pub):
+        if sender_pub is None and msg.identity_doc:
+            # TOFU handshake: derive agent_id from doc's public_key and
+            # confirm it matches msg.from_agent. If it does, the doc is
+            # cryptographically bound to the claimed identity.
+            sender_pub = self._tofu_register(msg.from_agent, msg.identity_doc)
+        if sender_pub is None:
+            res = build_res(
+                identity._private_key, identity.agent_id, msg,
+                status="error",
+                fault={
+                    "code": "unknown_peer",
+                    "detail": (
+                        f"sender {msg.from_agent[:24]}... is not in peer cache "
+                        f"and no identity_doc was provided"
+                    ),
+                },
+            )
+            return res.to_dict()
+        if not verify_message(msg, sender_pub):
             res = build_res(
                 identity._private_key, identity.agent_id, msg,
                 status="error",
@@ -174,8 +195,21 @@ class PACTAgent:
                     )
                     return res.to_dict()
 
-                # Verify holder proof
-                if sender_pub and msg.holder_proof:
+                # Verify holder proof. Mandatory when a cap is presented —
+                # omitting holder_proof must reject (issue #3). Without this
+                # rule, a stolen cap is usable by any sender willing to skip
+                # the proof field.
+                if sender_pub:
+                    if not msg.holder_proof:
+                        res = build_res(
+                            identity._private_key, identity.agent_id, msg,
+                            status="error",
+                            fault={
+                                "code": "holder_proof_required",
+                                "detail": "holder_proof is mandatory when cap_id is present",
+                            },
+                        )
+                        return res.to_dict()
                     if not verify_holder_proof(msg, sender_pub):
                         res = build_res(
                             identity._private_key, identity.agent_id, msg,
@@ -260,6 +294,36 @@ class PACTAgent:
         if peer and "public_key" in peer:
             return base64.b64decode(peer["public_key"])
         return None
+
+    def _tofu_register(self, claimed_agent_id: str, identity_doc: dict) -> bytes | None:
+        """Trust-on-first-use registration of an inline identity_doc.
+
+        The sender claims `from_agent = claimed_agent_id` and includes a
+        full identity_doc inline. We accept it ONLY IF the claimed agent_id
+        derives cryptographically from the doc's public_key. After the
+        check, we cache the doc as a peer.
+
+        Returns the verified public_key bytes if the doc binds to the
+        claimed agent_id, None otherwise.
+
+        Note: this is genuinely "trust on first use" — an attacker can
+        present any fresh identity, but they cannot impersonate an
+        existing agent_id without that agent's private key. Combined with
+        capability-scoped authorization (auto_grant=False), unknown peers
+        cannot do anything they haven't been explicitly granted.
+        """
+        pub_b64 = identity_doc.get("public_key")
+        if not pub_b64:
+            return None
+        # agent_id = sha256(alg || public_key_b64)
+        derived = crypto.sha256_digest(f"{crypto.ALG}{pub_b64}".encode())
+        if derived != claimed_agent_id:
+            return None
+        if identity_doc.get("agent_id") != claimed_agent_id:
+            return None
+        # Bind: cache the doc and return the pubkey
+        self._store.save_peer(claimed_agent_id, identity_doc)
+        return base64.b64decode(pub_b64)
 
     def ask(
         self,

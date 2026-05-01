@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 
 from pact.identity import Identity
 from pact.capability import issue_capability, Caveat
-from pact.message import PACTMessage
+from pact.message import PACTMessage, build_req
 from pact.agent import PACTAgent
 
 
@@ -19,6 +19,7 @@ def test_rate_limit_enforced(store):
         return {"ok": True}
 
     bob_identity = bob_agent._ensure_identity()
+    bob_agent._store.save_peer(alice.agent_id, alice.to_identity_document())
 
     # Issue capability with max_invocations=2
     cap = issue_capability(
@@ -29,17 +30,15 @@ def test_rate_limit_enforced(store):
     store.save_capability("bob_rl", cap.to_dict())
 
     def make_req():
-        return PACTMessage(
-            id=str(uuid.uuid4()),
-            type="REQ",
-            from_agent=alice.agent_id,
-            to_agent=bob_identity.agent_id,
+        return build_req(
+            from_private_key=alice._private_key,
+            from_id=alice.agent_id,
+            to_id=bob_identity.agent_id,
             intent="task",
             payload={"action": "limited_action"},
             cap_id=cap.cap_id,
-            deadline=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
-            idempotency_key=str(uuid.uuid4()),
-            signature="",
+            holder_proof_key=alice._private_key,
+            deadline_seconds=30,
         ).to_dict()
 
     # First two should succeed
@@ -65,6 +64,7 @@ def test_no_rate_limit_without_caveat(store):
         return {"ok": True}
 
     bob_identity = bob_agent._ensure_identity()
+    bob_agent._store.save_peer(alice.agent_id, alice.to_identity_document())
 
     cap = issue_capability(
         bob_identity._private_key, bob_identity.agent_id, alice.agent_id,
@@ -73,17 +73,15 @@ def test_no_rate_limit_without_caveat(store):
     store.save_capability("bob_norl", cap.to_dict())
 
     def make_req():
-        return PACTMessage(
-            id=str(uuid.uuid4()),
-            type="REQ",
-            from_agent=alice.agent_id,
-            to_agent=bob_identity.agent_id,
+        return build_req(
+            from_private_key=alice._private_key,
+            from_id=alice.agent_id,
+            to_id=bob_identity.agent_id,
             intent="task",
             payload={"action": "unlimited"},
             cap_id=cap.cap_id,
-            deadline=(datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat(),
-            idempotency_key=str(uuid.uuid4()),
-            signature="",
+            holder_proof_key=alice._private_key,
+            deadline_seconds=30,
         ).to_dict()
 
     # Should all succeed
