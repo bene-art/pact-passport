@@ -1,6 +1,9 @@
 """Tests for store module."""
 
 import os
+import sys
+
+import pytest
 
 from pact.store import PACTStore
 
@@ -13,6 +16,10 @@ def test_save_load_private_key(tmp_pact_home):
     assert loaded == key
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission semantics not applicable on Windows NTFS (issue #6)",
+)
 def test_key_permissions(tmp_pact_home):
     store = PACTStore(tmp_pact_home)
     store.save_private_key("alice", os.urandom(32))

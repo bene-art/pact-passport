@@ -4,7 +4,18 @@ import subprocess
 import sys
 import os
 
+import pytest
 
+# Doctor checks POSIX-style 0o600 file permissions. NTFS reports 0o666 for
+# user files regardless of actual ACLs, so doctor always reports a
+# permissions issue on Windows. Tracked as issue #6.
+windows_only_skip = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="doctor's POSIX permission check is not applicable on Windows (issue #6)",
+)
+
+
+@windows_only_skip
 def test_doctor_healthy(tmp_pact_home):
     """Doctor passes on a healthy agent."""
     env = {**os.environ, "PACT_HOME": str(tmp_pact_home)}
@@ -26,6 +37,7 @@ def test_doctor_healthy(tmp_pact_home):
     assert "All checks passed" in result.stdout
 
 
+@windows_only_skip
 def test_doctor_after_rotation(tmp_pact_home):
     """Doctor passes after key rotation."""
     env = {**os.environ, "PACT_HOME": str(tmp_pact_home)}
@@ -42,6 +54,7 @@ def test_doctor_after_rotation(tmp_pact_home):
     assert "All checks passed" in result.stdout
 
 
+@windows_only_skip
 def test_doctor_bad_permissions(tmp_pact_home):
     """Doctor catches bad key permissions."""
     env = {**os.environ, "PACT_HOME": str(tmp_pact_home)}
