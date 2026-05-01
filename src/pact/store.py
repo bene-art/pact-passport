@@ -50,9 +50,17 @@ def _write_atomic(path: Path, data: bytes | str) -> None:
 
 
 def _write_key(path: Path, data: bytes) -> None:
-    """Write key material with restrictive permissions."""
+    """Write key material with restrictive permissions.
+
+    O_BINARY is required on Windows — the default text mode translates
+    LF (0x0a) bytes to CRLF, which corrupts ~12% of randomly generated
+    Ed25519 seeds.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    fd = os.open(str(path), flags, 0o600)
     try:
         os.write(fd, data)
     finally:
