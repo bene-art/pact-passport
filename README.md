@@ -1,17 +1,21 @@
-# PACT — Protocol for Agent Capability and Trust
+# PACT Passport
+
+**The agent ID.**
 
 [![Tests](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/pact-protocol)](https://pypi.org/project/pact-protocol/)
-[![Python](https://img.shields.io/pypi/pyversions/pact-protocol)](https://pypi.org/project/pact-protocol/)
+[![PyPI](https://img.shields.io/pypi/v/pact-passport)](https://pypi.org/project/pact-passport/)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A v1 reference implementation of an agent-to-agent trust protocol. Two message types, holder-bound capabilities, and self-certifying identity. Everything else is built at the edges.
+Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Two message types — REQ and RES. Everything else is built at the edges.
 
-> **Status:** v0.1.3 reference implementation. The protocol design is stable; known security and durability gaps from this implementation are tracked in [open issues](https://github.com/bene-art/pact-protocol/issues) for v0.2 hardening. Suitable for experimentation, learning, and as a starting point — not yet for production deployment without addressing the linked issues.
+> **Status:** v0.1.4 reference implementation. The protocol design is stable; known security and durability gaps from this implementation are tracked in [open issues](https://github.com/bene-art/pact-protocol/issues) for v0.2 hardening. Suitable for experimentation, learning, and as a starting point — not yet for production deployment without addressing the linked issues.
 
-## What is PACT?
+## What is PACT Passport?
 
-PACT is a minimal trust protocol for agent-to-agent interaction. It sits **below** orchestration protocols like MCP and A2A as the **trust substrate** — the layer where identity is self-certifying, authority is holder-bound and attenuable, ordering is causal, and failure is explicit.
+If MCP and A2A are how agents *talk*, PACT Passport is how they *prove who they are*. Each agent gets a self-certifying identity (Ed25519 keypair, agent_id derived from the public key). Authority is granted via holder-bound capability tokens that can only be tightened down a delegation chain, never widened. Every exchange produces signed audit receipts on both sides — independently verifiable, no central registry required.
+
+PACT (Protocol for Agent Capability and Trust) sits **below** orchestration protocols like MCP and A2A as the **trust substrate** — the layer where identity is self-certifying, authority is holder-bound and attenuable, ordering is causal, and failure is explicit.
 
 ### Three Primitives
 
@@ -26,15 +30,22 @@ Plus: **unilateral audit receipts** — each agent signs their own view, no coop
 ## Install
 
 ```bash
-pip install pact-protocol
+pip install pact-passport
+```
+
+Or directly from this repo:
+```bash
+pip install git+https://github.com/bene-art/pact-protocol.git
 ```
 
 Optional extras:
 ```bash
-pip install pact-protocol[cbor]    # CBOR encoding support
-pip install pact-protocol[fast]    # Async uvicorn server
-pip install pact-protocol[lak]     # local-agent-kit integration
+pip install pact-passport[cbor]    # CBOR encoding support
+pip install pact-passport[fast]    # Async uvicorn server
+pip install pact-passport[lak]     # local-agent-kit integration
 ```
+
+The Python module is `pact` regardless of the distribution name — `from pact import PACTAgent` works either way.
 
 ## Quick Start
 
