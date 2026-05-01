@@ -147,7 +147,8 @@ class PACTStore:
     def save_receipt(self, name: str, receipt: dict) -> None:
         rcpt_dir = self._agent_dir(name) / "receipts"
         rcpt_dir.mkdir(parents=True, exist_ok=True)
-        ts = receipt.get("timestamp", "unknown")
+        # Replace colons in ISO timestamps — illegal in Windows filenames.
+        ts = receipt.get("timestamp", "unknown").replace(":", "-")
         ref = receipt.get("task_ref", "unknown")[:8]
         path = rcpt_dir / f"{ts}-{ref}.json"
         _write_atomic(path, json.dumps(receipt, indent=2))
