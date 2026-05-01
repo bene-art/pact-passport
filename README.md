@@ -2,14 +2,14 @@
 
 **The agent ID.**
 
-[![Tests](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml/badge.svg)](https://github.com/bene-art/pact-protocol/actions/workflows/test.yml)
+[![Tests](https://github.com/bene-art/pact-passport/actions/workflows/test.yml/badge.svg)](https://github.com/bene-art/pact-passport/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/pact-passport)](https://pypi.org/project/pact-passport/)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Two message types — REQ and RES. Everything else is built at the edges.
 
-> **Status:** v0.1.4 reference implementation. The protocol design is stable; known security and durability gaps from this implementation are tracked in [open issues](https://github.com/bene-art/pact-protocol/issues) for v0.2 hardening. Suitable for experimentation, learning, and as a starting point — not yet for production deployment without addressing the linked issues.
+> **Status:** v0.1.4 reference implementation. The protocol design is stable; known security and durability gaps from this implementation are tracked in [open issues](https://github.com/bene-art/pact-passport/issues) for v0.2 hardening. Suitable for experimentation, learning, and as a starting point — not yet for production deployment without addressing the linked issues.
 
 ## What is PACT Passport?
 
@@ -35,7 +35,7 @@ pip install pact-passport
 
 Or directly from this repo:
 ```bash
-pip install git+https://github.com/bene-art/pact-protocol.git
+pip install git+https://github.com/bene-art/pact-passport.git
 ```
 
 Optional extras:
@@ -150,7 +150,7 @@ pytest -v
 | **Linux** (Alpine on WSL2) | 118 passed, 1 xfailed |
 | **Windows 11** | 114 passed, 4 skipped (POSIX-only checks), 1 xfailed |
 
-The xfail tracks a known peer-cache-staleness bug after key rotation; see [#4](https://github.com/bene-art/pact-protocol/issues/4).
+The xfail tracks a known peer-cache-staleness bug after key rotation; see [#4](https://github.com/bene-art/pact-passport/issues/4).
 
 ### Concurrency stress mode
 

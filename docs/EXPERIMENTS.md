@@ -263,14 +263,14 @@ What's tracked for v0.2:
 
 | Issue | Severity | What |
 |---|---|---|
-| [#2](https://github.com/bene-art/pact-protocol/issues/2) | critical | Auth-bypass-by-default |
-| [#3](https://github.com/bene-art/pact-protocol/issues/3) | critical | Holder-proof bypass |
-| [#8](https://github.com/bene-art/pact-protocol/issues/8) | critical | Forged delegation chains pass when delegator key unknown |
-| [#4](https://github.com/bene-art/pact-protocol/issues/4) | security | Rotation breaks live communication |
-| [#5](https://github.com/bene-art/pact-protocol/issues/5) | durability | Idempotency cache + invocation counters in-memory only |
-| [#9](https://github.com/bene-art/pact-protocol/issues/9) | security | No request size limit (slow-loris DoS) |
-| [#10](https://github.com/bene-art/pact-protocol/issues/10) | security | Cap envelope inline in REQ |
-| [#11](https://github.com/bene-art/pact-protocol/issues/11) | feature | Streaming response support |
+| [#2](https://github.com/bene-art/pact-passport/issues/2) | critical | Auth-bypass-by-default |
+| [#3](https://github.com/bene-art/pact-passport/issues/3) | critical | Holder-proof bypass |
+| [#8](https://github.com/bene-art/pact-passport/issues/8) | critical | Forged delegation chains pass when delegator key unknown |
+| [#4](https://github.com/bene-art/pact-passport/issues/4) | security | Rotation breaks live communication |
+| [#5](https://github.com/bene-art/pact-passport/issues/5) | durability | Idempotency cache + invocation counters in-memory only |
+| [#9](https://github.com/bene-art/pact-passport/issues/9) | security | No request size limit (slow-loris DoS) |
+| [#10](https://github.com/bene-art/pact-passport/issues/10) | security | Cap envelope inline in REQ |
+| [#11](https://github.com/bene-art/pact-passport/issues/11) | feature | Streaming response support |
 
 ---
 
@@ -290,4 +290,4 @@ For now: it works on my machines. It runs my agent stack. The bugs I found are d
 
 ---
 
-*The full repository, including all 23 experiment scripts, is at [github.com/bene-art/pact-protocol](https://github.com/bene-art/pact-protocol).*
+*The full repository, including all 23 experiment scripts, is at [github.com/bene-art/pact-passport](https://github.com/bene-art/pact-passport).*
