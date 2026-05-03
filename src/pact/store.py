@@ -192,6 +192,41 @@ class PACTStore:
             return None
         return json.loads(path.read_text())
 
+    # --- Idempotency state (issue #5) ---
+    #
+    # Both the idempotency cache and the invocation counters were in-memory
+    # only pre-v0.3. Restart wiped them, so a network-retried REQ would
+    # re-execute and a max_invocations=N cap effectively reset to 0. v0.3
+    # persists both per-agent on disk via atomic JSON writes.
+
+    def save_idempotency_cache(self, name: str, cache: dict) -> None:
+        """Persist the idempotency cache. cache: {idem_key: [response_dict, expires_iso]}."""
+        path = self._agent_dir(name) / "idempotency_cache.json"
+        _write_atomic(path, json.dumps(cache, indent=2))
+
+    def load_idempotency_cache(self, name: str) -> dict:
+        path = self._agent_dir(name) / "idempotency_cache.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def save_invocation_counts(self, name: str, counts: dict) -> None:
+        """Persist per-cap invocation counts. counts: {cap_id: int}."""
+        path = self._agent_dir(name) / "invocation_counts.json"
+        _write_atomic(path, json.dumps(counts, indent=2))
+
+    def load_invocation_counts(self, name: str) -> dict:
+        path = self._agent_dir(name) / "invocation_counts.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
     # --- Peers ---
 
     def save_peer(self, agent_id: str, doc: dict) -> None:
