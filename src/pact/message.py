@@ -35,6 +35,11 @@ class PACTMessage:
     # ad-hoc: agent_id must derive from the doc's public_key, and the
     # message signature must verify against that key. Issue #2.
     identity_doc: dict | None = None
+    # Capability envelope. When the sender presents a cap_id the receiver
+    # doesn't have locally, an inline cap_envelope (the full cap dict)
+    # lets the receiver verify the delegation chain and cache the cap.
+    # Required for cross-machine delegation (A→B→C). Issue #10.
+    cap_envelope: dict | None = None
     alg: str = crypto.ALG
     signature: str = ""  # base64-encoded
 
@@ -65,6 +70,8 @@ class PACTMessage:
             d["fault"] = self.fault
         if self.identity_doc is not None:
             d["identity_doc"] = self.identity_doc
+        if self.cap_envelope is not None:
+            d["cap_envelope"] = self.cap_envelope
         return d
 
     @classmethod
@@ -84,6 +91,7 @@ class PACTMessage:
             status=d.get("status"),
             fault=d.get("fault"),
             identity_doc=d.get("identity_doc"),
+            cap_envelope=d.get("cap_envelope"),
             alg=d.get("alg", crypto.ALG),
             signature=d.get("signature", ""),
         )
@@ -106,6 +114,7 @@ def build_req(
     deadline_seconds: int = 30,
     refs: list[str] | None = None,
     identity_doc: dict | None = None,
+    cap_envelope: dict | None = None,
 ) -> PACTMessage:
     """Build and sign a REQ message."""
     msg_id = str(uuid.uuid4())
@@ -123,6 +132,7 @@ def build_req(
         idempotency_key=str(uuid.uuid4()),
         payload=payload or {},
         identity_doc=identity_doc,
+        cap_envelope=cap_envelope,
     )
 
     # Holder proof: sign the message ID with the holder's key
