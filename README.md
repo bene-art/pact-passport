@@ -151,11 +151,11 @@ pytest -v
 
 | Platform | Status |
 |---|---|
-| **macOS** (Darwin) | 118 passed, 1 xfailed |
-| **Linux** (Alpine on WSL2) | 118 passed, 1 xfailed |
-| **Windows 11** | 114 passed, 4 skipped (POSIX-only checks), 1 xfailed |
+| **macOS** (Darwin) | 131 passed |
+| **Linux** (Alpine on WSL2) | 131 passed |
+| **Windows 11** | 127 passed, 4 skipped (POSIX-only checks) |
 
-The xfail tracks a known peer-cache-staleness bug after key rotation; see [#4](https://github.com/bene-art/pact-passport/issues/4).
+Rotation peer-cache-staleness (formerly tracked as the only xfail) was fixed in v0.3.1. See [#4](https://github.com/bene-art/pact-passport/issues/4).
 
 ### Concurrency stress mode
 

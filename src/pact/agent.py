@@ -234,8 +234,17 @@ class PACTAgent:
                 f"and no identity_doc was provided",
             )
         if not verify_message(msg, sender_pub):
-            return self._dispatch_err(ctx, "invalid_signature",
-                                      "Message signature verification failed")
+            # Rotation refresh path (issue #4). The cached pubkey may be
+            # stale because the sender rotated their keys. If they include
+            # a fresh identity_doc, attempt a KERI-style continuity check:
+            # the new pubkey's hash must match the cached doc's
+            # next_key_digest. If it does, update the cache and retry.
+            refreshed_pub = self._maybe_refresh_peer_after_rotation(msg)
+            if refreshed_pub is not None and verify_message(msg, refreshed_pub):
+                sender_pub = refreshed_pub
+            else:
+                return self._dispatch_err(ctx, "invalid_signature",
+                                          "Message signature verification failed")
         ctx.sender_pub = sender_pub
         return None
 
@@ -340,6 +349,52 @@ class PACTAgent:
         if peer and "public_key" in peer:
             return base64.b64decode(peer["public_key"])
         return None
+
+    def _maybe_refresh_peer_after_rotation(self, msg: PACTMessage) -> bytes | None:
+        """Try to refresh a stale peer pubkey using the REQ's inline doc.
+
+        Issue #4 — when a peer rotates their keys, our cached pubkey is
+        stale and verify_message fails. If the sender includes their new
+        identity_doc, we can verify rotation continuity (KERI-style):
+
+          hash(new_doc.public_key) == old_doc.next_key_digest
+
+        Note: agent_id does NOT derive from the *current* public_key —
+        it's anchored at inception. The continuity proof itself is what
+        cryptographically binds the new key to the existing identity.
+
+        Returns the verified new public_key bytes, or None if the
+        continuity proof fails (treat as attack or unrecoverable stale).
+        """
+        if not msg.identity_doc:
+            return None
+
+        new_doc = msg.identity_doc
+        new_pub_b64 = new_doc.get("public_key")
+        if not new_pub_b64:
+            return None
+
+        # Sanity: doc must claim the same agent_id as the message sender.
+        if new_doc.get("agent_id") != msg.from_agent:
+            return None
+
+        # Continuity check: the new pubkey's hash must match the prior
+        # doc's pre-rotation commitment. This is the KERI binding —
+        # without the original private key, the attacker can't have
+        # known what next_key_digest the cached doc committed to.
+        old_doc = self._store.load_peer(msg.from_agent)
+        if not old_doc:
+            return None
+        old_next = old_doc.get("next_key_digest")
+        if not old_next:
+            return None
+        new_pub = base64.b64decode(new_pub_b64)
+        if crypto.sha256_digest(new_pub) != old_next:
+            return None
+
+        # Continuity verified — update cache.
+        self._store.save_peer(msg.from_agent, new_doc)
+        return new_pub
 
     def _tofu_register(self, claimed_agent_id: str, identity_doc: dict) -> bytes | None:
         """Trust-on-first-use registration of an inline identity_doc.
