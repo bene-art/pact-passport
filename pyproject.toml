@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pact-passport"
-version = "0.2.0"
+version = "0.2.1"
 description = "PACT Passport — agent ID. Self-certifying identity, holder-bound capabilities, audit receipts."
 readme = "README.md"
 license = {text = "MIT"}

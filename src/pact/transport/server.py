@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Callable
@@ -22,12 +23,24 @@ from pact._canonical import (
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_MAX_BODY_BYTES = 1024 * 1024  # 1 MB
+DEFAULT_READ_TIMEOUT = 30.0  # seconds
+
+
 class PACTHandler(BaseHTTPRequestHandler):
     """HTTP request handler for PACT protocol messages."""
 
     # Set by the server instance
     dispatch: Callable[[dict], dict] | None = None
     identity_doc: dict | None = None
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES
+    read_timeout: float = DEFAULT_READ_TIMEOUT
+
+    def setup(self):
+        super().setup()
+        # Bound socket-level read timeout. Slow-loris attacks (issue #9)
+        # rely on the server willing to wait indefinitely for body bytes.
+        self.request.settimeout(self.read_timeout)
 
     def log_message(self, format, *args):
         logger.debug(format, *args)
@@ -76,9 +89,28 @@ class PACTHandler(BaseHTTPRequestHandler):
             self._send_response({"error": "empty body"}, 400)
             return
 
+        # Cap request size — issue #9. Without this, a client can declare
+        # any size and the server will attempt to read it, leading to OOM
+        # or slow-loris resource exhaustion.
+        if content_length > self.max_body_bytes:
+            self.send_response(413)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                f'{{"error": "request too large", "max_bytes": {self.max_body_bytes}}}'.encode()
+            )
+            return
+
         # Decode based on incoming Content-Type
         incoming_ct = self.headers.get("Content-Type", JSON_CONTENT_TYPE)
-        raw = self.rfile.read(content_length)
+        try:
+            raw = self.rfile.read(content_length)
+        except (socket.timeout, TimeoutError):
+            # Slow-loris: client declared content_length but never sent
+            # the bytes. read_timeout fires; we give up cleanly instead
+            # of holding the thread open.
+            self._send_response({"error": "read timeout"}, 408)
+            return
 
         try:
             body = decode_message(raw, incoming_ct)
@@ -106,11 +138,15 @@ class PACTServer:
         port: int = 0,
         dispatch: Callable[[dict], dict] | None = None,
         identity_doc: dict | None = None,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
     ):
         self.host = host
         self.port = port
         self._dispatch = dispatch
         self._identity_doc = identity_doc
+        self._max_body_bytes = max_body_bytes
+        self._read_timeout = read_timeout
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -122,6 +158,8 @@ class PACTServer:
             {
                 "dispatch": staticmethod(self._dispatch) if self._dispatch else None,
                 "identity_doc": self._identity_doc,
+                "max_body_bytes": self._max_body_bytes,
+                "read_timeout": self._read_timeout,
             },
         )
 

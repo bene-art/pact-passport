@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Callable, Any
@@ -30,6 +31,16 @@ from pact.transport.discovery import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _DispatchCtx:
+    """State shared across pipeline steps in PACTAgent._handle_task."""
+    msg: PACTMessage
+    identity: Identity
+    sender_pub: bytes | None = None
+    cap_token: CapabilityToken | None = None
+    action: str = ""
 
 
 class PACTAgent:
@@ -123,170 +134,159 @@ class PACTAgent:
         return res.to_dict()
 
     def _handle_task(self, msg: PACTMessage, identity: Identity) -> dict:
-        """Process a task REQ."""
+        """Process a task REQ via a pipeline of validators.
+
+        Each step returns None on success (continue) or a fully-formed
+        response dict on short-circuit (return immediately). The last
+        step runs the actual handler and records the receipt.
+
+        v0.2.1: replaces the 161-line _handle_task_locked from earlier
+        versions with a small, testable pipeline. Issue #13.
+        """
+        ctx = _DispatchCtx(msg=msg, identity=identity)
         with self._task_lock:
-            return self._handle_task_locked(msg, identity)
+            for step in (
+                self._step_check_deadline,
+                self._step_idempotency_lookup,
+                self._step_verify_sender,
+                self._step_verify_capability,
+                self._step_resolve_action,
+            ):
+                result = step(ctx)
+                if result is not None:
+                    return result
+            return self._step_run_handler(ctx)
 
-    def _handle_task_locked(self, msg: PACTMessage, identity: Identity) -> dict:
-        # Check deadline
-        if is_deadline_exceeded(msg):
-            res = build_res(
-                identity._private_key, identity.agent_id, msg,
-                status="error",
-                fault={"code": "deadline_exceeded", "detail": "Request deadline has passed"},
-            )
-            return res.to_dict()
+    # --- Dispatch pipeline steps ---
 
-        # Chaos hook: widens the idempotency-check + handler-execute window
-        # under PACT_CHAOS=1. Has no effect in normal runs.
+    def _step_check_deadline(self, ctx: "_DispatchCtx") -> dict | None:
+        if is_deadline_exceeded(ctx.msg):
+            return self._dispatch_err(ctx, "deadline_exceeded", "Request deadline has passed")
+        return None
+
+    def _step_idempotency_lookup(self, ctx: "_DispatchCtx") -> dict | None:
+        # Chaos hook: widens the cache-check + handler-execute window
+        # under PACT_CHAOS=1. No effect in normal runs.
         chaos_sleep()
-
-        # Idempotency check with TTL
+        msg = ctx.msg
         if msg.idempotency_key and msg.idempotency_key in self._idempotency_cache:
             cached_res, expires_at = self._idempotency_cache[msg.idempotency_key]
             if datetime.now(timezone.utc) < expires_at:
-                return cached_res
-            else:
-                del self._idempotency_cache[msg.idempotency_key]
+                return cached_res  # short-circuit with prior success
+            del self._idempotency_cache[msg.idempotency_key]
+        return None
 
-        # Verify sender identity. The pre-v0.2 logic silently skipped
-        # verification when sender_pub was None — issue #2's bypass. v0.2:
-        # require either a cached peer pubkey OR a valid inline identity_doc
-        # (trust-on-first-use) and reject otherwise.
+    def _step_verify_sender(self, ctx: "_DispatchCtx") -> dict | None:
+        msg = ctx.msg
         sender_pub = self._resolve_sender_key(msg.from_agent)
+        # Trust-on-first-use: an unknown peer providing an inline
+        # identity_doc that derives correctly to its claimed agent_id
+        # is auto-cached and accepted (issue #2).
         if sender_pub is None and msg.identity_doc:
-            # TOFU handshake: derive agent_id from doc's public_key and
-            # confirm it matches msg.from_agent. If it does, the doc is
-            # cryptographically bound to the claimed identity.
             sender_pub = self._tofu_register(msg.from_agent, msg.identity_doc)
         if sender_pub is None:
-            res = build_res(
-                identity._private_key, identity.agent_id, msg,
-                status="error",
-                fault={
-                    "code": "unknown_peer",
-                    "detail": (
-                        f"sender {msg.from_agent[:24]}... is not in peer cache "
-                        f"and no identity_doc was provided"
-                    ),
-                },
+            return self._dispatch_err(
+                ctx, "unknown_peer",
+                f"sender {msg.from_agent[:24]}... is not in peer cache "
+                f"and no identity_doc was provided",
             )
-            return res.to_dict()
         if not verify_message(msg, sender_pub):
-            res = build_res(
-                identity._private_key, identity.agent_id, msg,
-                status="error",
-                fault={"code": "invalid_signature", "detail": "Message signature verification failed"},
-            )
-            return res.to_dict()
+            return self._dispatch_err(ctx, "invalid_signature",
+                                      "Message signature verification failed")
+        ctx.sender_pub = sender_pub
+        return None
 
-        # Verify capability token
-        if msg.cap_id:
-            cap_dict = self._store.load_capability(self.name, msg.cap_id)
-            if cap_dict:
-                token = CapabilityToken.from_dict(cap_dict)
-                issuer_pub = identity.public_key  # we issued it
-                result = verify_capability(token, msg.from_agent, issuer_pub)
-                if not result.valid:
-                    res = build_res(
-                        identity._private_key, identity.agent_id, msg,
-                        status="error",
-                        fault={"code": "capability_invalid", "detail": result.reason},
-                    )
-                    return res.to_dict()
+    def _step_verify_capability(self, ctx: "_DispatchCtx") -> dict | None:
+        msg = ctx.msg
+        if not msg.cap_id:
+            return None  # falls through to payload-action lookup
+        cap_dict = self._store.load_capability(self.name, msg.cap_id)
+        if not cap_dict:
+            return None  # cap unknown to receiver — falls through
 
-                # Verify holder proof. Mandatory when a cap is presented —
-                # omitting holder_proof must reject (issue #3). Without this
-                # rule, a stolen cap is usable by any sender willing to skip
-                # the proof field.
-                if sender_pub:
-                    if not msg.holder_proof:
-                        res = build_res(
-                            identity._private_key, identity.agent_id, msg,
-                            status="error",
-                            fault={
-                                "code": "holder_proof_required",
-                                "detail": "holder_proof is mandatory when cap_id is present",
-                            },
-                        )
-                        return res.to_dict()
-                    if not verify_holder_proof(msg, sender_pub):
-                        res = build_res(
-                            identity._private_key, identity.agent_id, msg,
-                            status="error",
-                            fault={"code": "holder_proof_invalid", "detail": "Holder proof verification failed"},
-                        )
-                        return res.to_dict()
+        token = CapabilityToken.from_dict(cap_dict)
+        result = verify_capability(token, msg.from_agent, ctx.identity.public_key)
+        if not result.valid:
+            return self._dispatch_err(ctx, "capability_invalid", result.reason)
 
-                # Check max_invocations rate limit
-                max_inv = self._get_max_invocations(token)
-                if max_inv is not None:
-                    chaos_sleep()  # widens the read-then-increment window
-                    count = self._invocation_counts.get(token.cap_id, 0)
-                    if count >= max_inv:
-                        res = build_res(
-                            identity._private_key, identity.agent_id, msg,
-                            status="error",
-                            fault={"code": "rate_limited", "detail": f"max_invocations ({max_inv}) exceeded for cap {token.cap_id}"},
-                        )
-                        return res.to_dict()
-                    self._invocation_counts[token.cap_id] = count + 1
+        # Holder proof is mandatory when cap_id is present (issue #3).
+        if not msg.holder_proof:
+            return self._dispatch_err(ctx, "holder_proof_required",
+                                      "holder_proof is mandatory when cap_id is present")
+        if not verify_holder_proof(msg, ctx.sender_pub):
+            return self._dispatch_err(ctx, "holder_proof_invalid",
+                                      "Holder proof verification failed")
 
-                action = token.action
-            else:
-                # Auto-grant: look up action from payload
-                action = msg.payload.get("action", "")
+        # Rate limit (max_invocations caveat). Read-then-increment is
+        # serialized by the outer _task_lock.
+        max_inv = self._get_max_invocations(token)
+        if max_inv is not None:
+            chaos_sleep()
+            count = self._invocation_counts.get(token.cap_id, 0)
+            if count >= max_inv:
+                return self._dispatch_err(
+                    ctx, "rate_limited",
+                    f"max_invocations ({max_inv}) exceeded for cap {token.cap_id}",
+                )
+            self._invocation_counts[token.cap_id] = count + 1
+
+        ctx.cap_token = token
+        return None
+
+    def _step_resolve_action(self, ctx: "_DispatchCtx") -> dict | None:
+        if ctx.cap_token:
+            ctx.action = ctx.cap_token.action
         else:
-            action = msg.payload.get("action", "")
+            ctx.action = ctx.msg.payload.get("action", "")
+        if ctx.action not in self._handlers:
+            return self._dispatch_err(ctx, "no_handler",
+                                      f"No handler for action: {ctx.action}")
+        return None
 
-        # Dispatch to handler
-        handler = self._handlers.get(action)
-        if not handler:
-            res = build_res(
-                identity._private_key, identity.agent_id, msg,
-                status="error",
-                fault={"code": "no_handler", "detail": f"No handler for action: {action}"},
-            )
-            return res.to_dict()
-
+    def _step_run_handler(self, ctx: "_DispatchCtx") -> dict:
+        msg, identity = ctx.msg, ctx.identity
+        handler = self._handlers[ctx.action]
         try:
             result_payload = handler(msg.payload)
         except Exception as e:
-            res = build_res(
-                identity._private_key, identity.agent_id, msg,
-                status="error",
-                fault={"code": "handler_error", "detail": str(e)},
-            )
-            return res.to_dict()
+            return self._dispatch_err(ctx, "handler_error", str(e))
 
         res = build_res(
             identity._private_key, identity.agent_id, msg,
-            payload=result_payload if isinstance(result_payload, dict) else {"result": result_payload},
+            payload=result_payload if isinstance(result_payload, dict)
+                    else {"result": result_payload},
         )
-
-        # Store message and receipt
         self._store.save_message(self.name, msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
-        receipt = create_receipt(
+        self._store.save_receipt(self.name, create_receipt(
             identity._private_key, identity.agent_id,
             task_ref=msg.id, refs=[msg.id, res.id], outcome="completed",
-        )
-        self._store.save_receipt(self.name, receipt)
+        ))
 
-        # Cache for idempotency with TTL based on deadline
         result_dict = res.to_dict()
         if msg.idempotency_key:
-            ttl = timedelta(seconds=60)  # default 60s TTL
+            ttl = timedelta(seconds=60)
             if msg.deadline:
                 try:
                     deadline_dt = datetime.fromisoformat(msg.deadline)
-                    ttl = max(deadline_dt - datetime.now(timezone.utc), timedelta(seconds=10))
+                    ttl = max(deadline_dt - datetime.now(timezone.utc),
+                              timedelta(seconds=10))
                 except ValueError:
                     pass
-            self._idempotency_cache[msg.idempotency_key] = (result_dict, datetime.now(timezone.utc) + ttl)
+            self._idempotency_cache[msg.idempotency_key] = (
+                result_dict, datetime.now(timezone.utc) + ttl,
+            )
             self._evict_expired_cache()
-
         return result_dict
+
+    def _dispatch_err(self, ctx: "_DispatchCtx", code: str, detail: str) -> dict:
+        """Build a signed error response for any dispatch step."""
+        res = build_res(
+            ctx.identity._private_key, ctx.identity.agent_id, ctx.msg,
+            status="error",
+            fault={"code": code, "detail": detail},
+        )
+        return res.to_dict()
 
     def _resolve_sender_key(self, agent_id: str) -> bytes | None:
         """Look up a sender's public key from peers cache."""
