@@ -121,12 +121,45 @@ class PACTHandler(BaseHTTPRequestHandler):
         if self.dispatch:
             try:
                 result = self.dispatch(body)
-                self._send_response(result)
+                # Streaming path: dispatcher returned an iterator (issue #11).
+                # We write each chunk as one NDJSON line over chunked
+                # transfer encoding. Connection drop mid-stream raises
+                # BrokenPipeError, which we treat as cancellation.
+                if hasattr(result, "__next__") and not isinstance(result, dict):
+                    self._send_stream(result)
+                else:
+                    self._send_response(result)
             except Exception as e:
                 logger.exception("Dispatch error")
                 self._send_response({"error": str(e)}, 500)
         else:
             self._send_response({"error": "no dispatch handler"}, 500)
+
+    def _send_stream(self, chunks_iter) -> None:
+        """Write a stream of chunk dicts as NDJSON over HTTP chunked
+        transfer encoding. Each line is one fully-signed RES_CHUNK.
+        BrokenPipeError = consumer disconnected = cancellation."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        try:
+            for chunk_dict in chunks_iter:
+                line = (json.dumps(chunk_dict) + "\n").encode("utf-8")
+                # HTTP chunked transfer encoding: <hex-size>\r\n<bytes>\r\n
+                self.wfile.write(f"{len(line):X}\r\n".encode())
+                self.wfile.write(line)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+            # Terminating zero-length chunk
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # Consumer disconnected mid-stream. The generator inside
+            # dispatch will be GC'd and stop iterating. The receipt
+            # already written by _run_streaming_handler will reflect
+            # whatever chunks made it.
+            logger.info("client disconnected mid-stream")
 
 
 class PACTServer:

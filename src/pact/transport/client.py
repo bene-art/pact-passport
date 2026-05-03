@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import urllib.request
 import urllib.error
+from typing import Iterator
 
 from pact.message import PACTMessage
 from pact._canonical import (
@@ -65,6 +66,48 @@ def send_message(
         return {"status": "error", "fault": {"code": "unreachable", "detail": str(e.reason)}}
     except TimeoutError:
         return {"status": "error", "fault": {"code": "timeout", "detail": "Request timed out"}}
+
+
+def send_message_streaming(
+    target_base_url: str,
+    msg: PACTMessage,
+    timeout: float = 120.0,
+) -> "Iterator[dict]":
+    """Send a streaming REQ and yield each RES_CHUNK dict as it arrives.
+
+    The REQ should have stream=True. The server responds with
+    Content-Type: application/x-ndjson over chunked transfer encoding;
+    each line is one fully-signed RES_CHUNK. Issue #11.
+
+    The generator yields chunk dicts in arrival order. The terminal
+    chunk has chunk_final=True. If the server returns an error response
+    (one-shot dict, not a stream), it's yielded once and the generator
+    ends.
+    """
+    url = f"{target_base_url}/pact/v1/message"
+    data = json.dumps(msg.to_dict()).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": JSON_CONTENT_TYPE,
+            "Accept": "application/x-ndjson, application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ct = resp.headers.get("Content-Type", "")
+        if "ndjson" not in ct:
+            # Server didn't stream — could be an error response or a
+            # handler that returned dict (not generator). Yield once.
+            yield decode_message(resp.read(), ct)
+            return
+        # NDJSON stream — one chunk per line.
+        for line in resp:
+            line = line.strip()
+            if not line:
+                continue
+            yield json.loads(line)
 
 
 def fetch_identity(target_base_url: str, timeout: float = 10.0) -> dict | None:
