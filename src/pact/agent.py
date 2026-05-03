@@ -252,14 +252,48 @@ class PACTAgent:
         msg = ctx.msg
         if not msg.cap_id:
             return None  # falls through to payload-action lookup
+
         cap_dict = self._store.load_capability(self.name, msg.cap_id)
-        if not cap_dict:
-            return None  # cap unknown to receiver — falls through
+        from_envelope = False
+
+        if not cap_dict and msg.cap_envelope:
+            # Cap not in our store but provided inline — verify the chain
+            # and cache it. This is what makes A→B→C delegation work
+            # over the wire (issue #10).
+            cap_dict = msg.cap_envelope
+            if cap_dict.get("cap_id") != msg.cap_id:
+                return self._dispatch_err(
+                    ctx, "capability_invalid",
+                    "cap_envelope.cap_id does not match msg.cap_id",
+                )
+            from_envelope = True
+        elif not cap_dict:
+            # cap_id claimed but neither local nor provided inline.
+            # v0.4.0: reject explicitly instead of silently falling
+            # through to action-name dispatch.
+            return self._dispatch_err(
+                ctx, "cap_unknown",
+                f"cap_id {msg.cap_id[:24]}... not in local store and no cap_envelope provided",
+            )
 
         token = CapabilityToken.from_dict(cap_dict)
-        result = verify_capability(token, msg.from_agent, ctx.identity.public_key)
+
+        # The cap must have been issued by us (root issuer).
+        if token.issuer != ctx.identity.agent_id:
+            return self._dispatch_err(
+                ctx, "capability_invalid",
+                f"cap issuer {token.issuer[:24]}... is not this agent",
+            )
+
+        # For chain verification, gather pubkeys from peer cache.
+        known_keys = self._build_known_keys_for_chain(ctx.identity, cap_dict)
+        result = verify_capability(token, msg.from_agent, ctx.identity.public_key, known_keys)
         if not result.valid:
             return self._dispatch_err(ctx, "capability_invalid", result.reason)
+
+        # If verified from envelope, cache it locally for future use.
+        if from_envelope:
+            self._store.save_capability(self.name, cap_dict)
 
         # Holder proof is mandatory when cap_id is present (issue #3).
         if not msg.holder_proof:
@@ -349,6 +383,33 @@ class PACTAgent:
         if peer and "public_key" in peer:
             return base64.b64decode(peer["public_key"])
         return None
+
+    def _build_known_keys_for_chain(self, identity: Identity, cap_dict: dict) -> dict:
+        """Collect pubkeys needed to verify a delegation chain (issue #10).
+
+        Includes:
+          - our own identity (root issuer if cap was minted here)
+          - every delegator in the chain (from peer cache)
+          - the holder (from peer cache)
+
+        Missing keys cause verify_capability to fail closed (issue #8).
+        """
+        known: dict[str, bytes] = {identity.agent_id: identity.public_key}
+
+        for link in cap_dict.get("delegation_chain", []):
+            agent_id = link.get("from")
+            if agent_id and agent_id not in known:
+                pub = self._resolve_sender_key(agent_id)
+                if pub is not None:
+                    known[agent_id] = pub
+
+        holder_id = cap_dict.get("holder")
+        if holder_id and holder_id not in known:
+            pub = self._resolve_sender_key(holder_id)
+            if pub is not None:
+                known[holder_id] = pub
+
+        return known
 
     def _maybe_refresh_peer_after_rotation(self, msg: PACTMessage) -> bytes | None:
         """Try to refresh a stale peer pubkey using the REQ's inline doc.
