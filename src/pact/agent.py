@@ -64,6 +64,7 @@ class PACTAgent:
         host: str = "0.0.0.0",
         port: int = 0,
         auto_grant: bool = True,
+        idempotency_cache_max: int = 10_000,
     ):
         self.name = name
         self.capabilities = capabilities or []
@@ -76,10 +77,16 @@ class PACTAgent:
         self._server: PACTServer | None = None
         self._zc: Zeroconf | None = None
         self._mdns_info = None
+        # Idempotency cache + invocation counts are persisted per-agent
+        # to disk (issue #5). Loaded lazily on first dispatch via
+        # _ensure_state_loaded(). The lock below serializes both reads
+        # and writes inside a single process.
         self._idempotency_cache: dict[str, tuple[dict, datetime]] = {}  # key → (response, expires)
         self._invocation_counts: dict[str, int] = {}  # cap_id → count
-        # Serializes _handle_task to keep idempotency cache + invocation counter
-        # consistent under ThreadingHTTPServer concurrent dispatch.
+        self._state_loaded = False
+        # LRU bound on the cache (issue #5 follow-up). Tunable via
+        # idempotency_cache_max constructor arg.
+        self._idempotency_cache_max = idempotency_cache_max
         self._task_lock = threading.Lock()
 
     def _ensure_identity(self) -> Identity:
@@ -91,6 +98,41 @@ class PACTAgent:
         else:
             self._identity = Identity.create(self.name, self._store)
         return self._identity
+
+    def _ensure_state_loaded(self) -> None:
+        """Load idempotency cache + invocation counts from disk (issue #5).
+
+        Called lazily on first dispatch; safe to call repeatedly. The
+        on-disk format is JSON: cache values are [response, expires_iso].
+        Expired entries are dropped on load.
+        """
+        if self._state_loaded:
+            return
+        raw = self._store.load_idempotency_cache(self.name)
+        now = datetime.now(timezone.utc)
+        cache: dict[str, tuple[dict, datetime]] = {}
+        for k, v in raw.items():
+            try:
+                response, expires_iso = v
+                expires = datetime.fromisoformat(expires_iso)
+                if expires > now:
+                    cache[k] = (response, expires)
+            except (ValueError, TypeError):
+                continue  # corrupt entry, drop
+        self._idempotency_cache = cache
+        self._invocation_counts = self._store.load_invocation_counts(self.name)
+        self._state_loaded = True
+
+    def _persist_idempotency(self) -> None:
+        """Write the idempotency cache to disk in JSON-serializable form."""
+        serializable = {
+            k: [resp, expires.isoformat()]
+            for k, (resp, expires) in self._idempotency_cache.items()
+        }
+        self._store.save_idempotency_cache(self.name, serializable)
+
+    def _persist_invocation_counts(self) -> None:
+        self._store.save_invocation_counts(self.name, self._invocation_counts)
 
     def handle(self, action: str) -> Callable:
         """Decorator to register a handler for a capability action."""
@@ -145,6 +187,7 @@ class PACTAgent:
         """
         ctx = _DispatchCtx(msg=msg, identity=identity)
         with self._task_lock:
+            self._ensure_state_loaded()
             for step in (
                 self._step_check_deadline,
                 self._step_idempotency_lookup,
@@ -229,6 +272,7 @@ class PACTAgent:
                     f"max_invocations ({max_inv}) exceeded for cap {token.cap_id}",
                 )
             self._invocation_counts[token.cap_id] = count + 1
+            self._persist_invocation_counts()
 
         ctx.cap_token = token
         return None
@@ -277,6 +321,8 @@ class PACTAgent:
                 result_dict, datetime.now(timezone.utc) + ttl,
             )
             self._evict_expired_cache()
+            self._enforce_lru_cap()
+            self._persist_idempotency()
         return result_dict
 
     def _dispatch_err(self, ctx: "_DispatchCtx", code: str, detail: str) -> dict:
@@ -420,6 +466,23 @@ class PACTAgent:
         expired = [k for k, (_, exp) in self._idempotency_cache.items() if now >= exp]
         for k in expired:
             del self._idempotency_cache[k]
+
+    def _enforce_lru_cap(self) -> None:
+        """Bound the idempotency cache by oldest-expiry-first eviction.
+
+        v0.3.0 LRU is approximate — we evict entries with earliest
+        expires_at when the cap is exceeded. Real LRU would track
+        access order, but for an idempotency cache "soonest to expire
+        anyway" is a good-enough heuristic and avoids extra bookkeeping.
+        """
+        n = len(self._idempotency_cache)
+        if n <= self._idempotency_cache_max:
+            return
+        excess = n - self._idempotency_cache_max
+        # Sort by expires_at ascending; remove the earliest-expiring excess
+        ordered = sorted(self._idempotency_cache.items(), key=lambda kv: kv[1][1])
+        for key, _ in ordered[:excess]:
+            del self._idempotency_cache[key]
 
     def grant(
         self,
