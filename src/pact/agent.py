@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import logging
 import signal
 import sys
@@ -10,7 +11,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, Iterator
 
 from zeroconf import Zeroconf
 
@@ -19,7 +20,7 @@ from pact._chaos import chaos_sleep
 from pact.identity import Identity
 from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability, attenuate
 from pact.message import (
-    PACTMessage, build_req, build_res, verify_message,
+    PACTMessage, build_req, build_res, build_res_chunk, verify_message,
     verify_holder_proof, is_deadline_exceeded,
 )
 from pact.receipt import create_receipt
@@ -175,15 +176,11 @@ class PACTAgent:
         )
         return res.to_dict()
 
-    def _handle_task(self, msg: PACTMessage, identity: Identity) -> dict:
+    def _handle_task(self, msg: PACTMessage, identity: Identity):
         """Process a task REQ via a pipeline of validators.
 
-        Each step returns None on success (continue) or a fully-formed
-        response dict on short-circuit (return immediately). The last
-        step runs the actual handler and records the receipt.
-
-        v0.2.1: replaces the 161-line _handle_task_locked from earlier
-        versions with a small, testable pipeline. Issue #13.
+        Returns either a single dict (one-shot RES) or an iterator of
+        dicts (streaming RES_CHUNKs). The HTTP layer routes on type.
         """
         ctx = _DispatchCtx(msg=msg, identity=identity)
         with self._task_lock:
@@ -207,7 +204,7 @@ class PACTAgent:
             return self._dispatch_err(ctx, "deadline_exceeded", "Request deadline has passed")
         return None
 
-    def _step_idempotency_lookup(self, ctx: "_DispatchCtx") -> dict | None:
+    def _step_idempotency_lookup(self, ctx: "_DispatchCtx") -> dict | Iterator[dict] | None:
         # Chaos hook: widens the cache-check + handler-execute window
         # under PACT_CHAOS=1. No effect in normal runs.
         chaos_sleep()
@@ -215,7 +212,12 @@ class PACTAgent:
         if msg.idempotency_key and msg.idempotency_key in self._idempotency_cache:
             cached_res, expires_at = self._idempotency_cache[msg.idempotency_key]
             if datetime.now(timezone.utc) < expires_at:
-                return cached_res  # short-circuit with prior success
+                # Streaming replay: cached value is a list of chunk dicts.
+                # Yield them back as a fresh iterator so the HTTP layer
+                # streams them just like a fresh response (#11).
+                if isinstance(cached_res, list):
+                    return iter(cached_res)
+                return cached_res  # one-shot replay
             del self._idempotency_cache[msg.idempotency_key]
         return None
 
@@ -330,18 +332,24 @@ class PACTAgent:
                                       f"No handler for action: {ctx.action}")
         return None
 
-    def _step_run_handler(self, ctx: "_DispatchCtx") -> dict:
+    def _step_run_handler(self, ctx: "_DispatchCtx") -> dict | Iterator[dict]:
         msg, identity = ctx.msg, ctx.identity
         handler = self._handlers[ctx.action]
         try:
-            result_payload = handler(msg.payload)
+            result = handler(msg.payload)
         except Exception as e:
             return self._dispatch_err(ctx, "handler_error", str(e))
 
+        # Streaming path: handler returned a generator/iterator. The
+        # dispatcher yields signed RES_CHUNK dicts; the HTTP layer
+        # writes them as NDJSON over chunked transfer encoding (issue #11).
+        if inspect.isgenerator(result) or (hasattr(result, "__iter__") and not isinstance(result, dict)):
+            return self._run_streaming_handler(ctx, result)
+
+        # One-shot path (existing).
         res = build_res(
             identity._private_key, identity.agent_id, msg,
-            payload=result_payload if isinstance(result_payload, dict)
-                    else {"result": result_payload},
+            payload=result if isinstance(result, dict) else {"result": result},
         )
         self._store.save_message(self.name, msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
@@ -351,22 +359,95 @@ class PACTAgent:
         ))
 
         result_dict = res.to_dict()
-        if msg.idempotency_key:
-            ttl = timedelta(seconds=60)
-            if msg.deadline:
-                try:
-                    deadline_dt = datetime.fromisoformat(msg.deadline)
-                    ttl = max(deadline_dt - datetime.now(timezone.utc),
-                              timedelta(seconds=10))
-                except ValueError:
-                    pass
-            self._idempotency_cache[msg.idempotency_key] = (
-                result_dict, datetime.now(timezone.utc) + ttl,
-            )
-            self._evict_expired_cache()
-            self._enforce_lru_cap()
-            self._persist_idempotency()
+        self._cache_idempotent_response(msg, result_dict)
         return result_dict
+
+    def _run_streaming_handler(self, ctx: "_DispatchCtx", source) -> Iterator[dict]:
+        """Wrap a generator handler: sign each yielded payload as a
+        RES_CHUNK and collect for caching. Issue #11.
+
+        On normal completion: writes a single receipt referencing all
+        chunks, caches the chunk list under idempotency_key.
+        On generator failure (handler raised): emits an error chunk
+        with chunk_final=true and writes a 'failed' receipt.
+        On consumer disconnect: cancellation is detected at the HTTP
+        layer; the receipt is written with outcome='cancelled' there.
+        """
+        msg, identity = ctx.msg, ctx.identity
+        chunk_dicts: list[dict] = []
+        seq = 0
+        last_payload = None
+
+        def _build_and_sign(payload, final):
+            nonlocal seq
+            chunk = build_res_chunk(
+                identity._private_key, identity.agent_id, msg,
+                chunk_seq=seq, chunk_final=final, payload=payload,
+            )
+            seq += 1
+            return chunk.to_dict()
+
+        try:
+            for payload in source:
+                if last_payload is not None:
+                    # Emit the previously held chunk as non-final
+                    out = _build_and_sign(last_payload, final=False)
+                    chunk_dicts.append(out)
+                    yield out
+                last_payload = payload if isinstance(payload, dict) else {"result": payload}
+            # Emit the final chunk
+            if last_payload is None:
+                last_payload = {}  # empty stream
+            out = _build_and_sign(last_payload, final=True)
+            chunk_dicts.append(out)
+            yield out
+        except Exception as e:
+            # Handler raised mid-stream; emit an error chunk as the terminal
+            err_chunk = build_res_chunk(
+                identity._private_key, identity.agent_id, msg,
+                chunk_seq=seq, chunk_final=True,
+                payload={}, status="error",
+                fault={"code": "handler_error", "detail": str(e)},
+            ).to_dict()
+            chunk_dicts.append(err_chunk)
+            yield err_chunk
+
+        # Persist + receipt after the stream completes.
+        self._store.save_message(self.name, msg.to_dict())
+        for chunk in chunk_dicts:
+            self._store.save_message(self.name, chunk)
+        outcome = "completed" if chunk_dicts and chunk_dicts[-1].get("status") != "error" else "failed"
+        self._store.save_receipt(self.name, create_receipt(
+            identity._private_key, identity.agent_id,
+            task_ref=msg.id,
+            refs=[msg.id] + [c["id"] for c in chunk_dicts],
+            outcome=outcome,
+        ))
+
+        # Cache full chunk list for idempotent replay (#11).
+        if msg.idempotency_key and outcome == "completed":
+            self._cache_idempotent_response(msg, chunk_dicts)
+
+    def _cache_idempotent_response(self, msg: PACTMessage, response) -> None:
+        """Cache a one-shot dict OR a streaming chunk list under the
+        idempotency_key. The value distinguishes shape on replay:
+        list → re-stream; dict → one-shot."""
+        if not msg.idempotency_key:
+            return
+        ttl = timedelta(seconds=60)
+        if msg.deadline:
+            try:
+                deadline_dt = datetime.fromisoformat(msg.deadline)
+                ttl = max(deadline_dt - datetime.now(timezone.utc),
+                          timedelta(seconds=10))
+            except ValueError:
+                pass
+        self._idempotency_cache[msg.idempotency_key] = (
+            response, datetime.now(timezone.utc) + ttl,
+        )
+        self._evict_expired_cache()
+        self._enforce_lru_cap()
+        self._persist_idempotency()
 
     def _dispatch_err(self, ctx: "_DispatchCtx", code: str, detail: str) -> dict:
         """Build a signed error response for any dispatch step."""

@@ -16,9 +16,9 @@ from pact._canonical import canonical_json
 
 @dataclass
 class PACTMessage:
-    """A PACT protocol message (REQ or RES)."""
+    """A PACT protocol message (REQ, RES, or RES_CHUNK)."""
     id: str
-    type: str  # "REQ" or "RES"
+    type: str  # "REQ", "RES", or "RES_CHUNK"
     from_agent: str  # agent_id
     to_agent: str  # agent_id
     refs: list[str] = field(default_factory=list)
@@ -30,6 +30,13 @@ class PACTMessage:
     payload: dict = field(default_factory=dict)
     status: str | None = None  # "ok" or "error" (RES only)
     fault: dict | None = None  # (RES only)
+    # Streaming fields (RES_CHUNK only). Issue #11. Each chunk is a
+    # complete signed PACTMessage; chunk_seq is monotonic (0, 1, 2, ...);
+    # chunk_final marks the terminal chunk in the stream. The REQ that
+    # triggered streaming has stream=True.
+    stream: bool | None = None  # REQ only — opt-in to streaming response
+    chunk_seq: int | None = None  # RES_CHUNK only
+    chunk_final: bool | None = None  # RES_CHUNK only
     # Trust-on-first-use field. When the receiver doesn't have the sender
     # in its peer cache, an inline identity_doc lets it verify the sender
     # ad-hoc: agent_id must derive from the doc's public_key, and the
@@ -72,6 +79,12 @@ class PACTMessage:
             d["identity_doc"] = self.identity_doc
         if self.cap_envelope is not None:
             d["cap_envelope"] = self.cap_envelope
+        if self.stream is not None:
+            d["stream"] = self.stream
+        if self.chunk_seq is not None:
+            d["chunk_seq"] = self.chunk_seq
+        if self.chunk_final is not None:
+            d["chunk_final"] = self.chunk_final
         return d
 
     @classmethod
@@ -92,6 +105,9 @@ class PACTMessage:
             fault=d.get("fault"),
             identity_doc=d.get("identity_doc"),
             cap_envelope=d.get("cap_envelope"),
+            stream=d.get("stream"),
+            chunk_seq=d.get("chunk_seq"),
+            chunk_final=d.get("chunk_final"),
             alg=d.get("alg", crypto.ALG),
             signature=d.get("signature", ""),
         )
@@ -115,8 +131,15 @@ def build_req(
     refs: list[str] | None = None,
     identity_doc: dict | None = None,
     cap_envelope: dict | None = None,
+    stream: bool = False,
 ) -> PACTMessage:
-    """Build and sign a REQ message."""
+    """Build and sign a REQ message.
+
+    Set stream=True to request a streaming response (RES_CHUNK sequence
+    instead of single RES). The handler on the receiver side must yield
+    chunks for streaming to actually happen; otherwise it falls back to
+    a normal one-shot RES.
+    """
     msg_id = str(uuid.uuid4())
     deadline = (datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)).isoformat()
 
@@ -133,6 +156,7 @@ def build_req(
         payload=payload or {},
         identity_doc=identity_doc,
         cap_envelope=cap_envelope,
+        stream=stream if stream else None,  # only include when True
     )
 
     # Holder proof: sign the message ID with the holder's key
@@ -171,6 +195,41 @@ def build_res(
     sig = crypto.sign(canonical_json(msg.signable_dict()), from_private_key)
     msg.signature = base64.b64encode(sig).decode("ascii")
 
+    return msg
+
+
+def build_res_chunk(
+    from_private_key: bytes,
+    from_id: str,
+    req: PACTMessage,
+    chunk_seq: int,
+    chunk_final: bool,
+    payload: dict | None = None,
+    status: str = "ok",
+    fault: dict | None = None,
+) -> PACTMessage:
+    """Build and sign one RES_CHUNK in response to a streaming REQ.
+
+    Each chunk is a fully-formed signed PACTMessage. chunk_seq is
+    monotonic (0, 1, 2, ...). chunk_final marks the terminal chunk.
+    Both fields are part of the signed bytes — tampering with either
+    invalidates the chunk's signature.
+    """
+    msg = PACTMessage(
+        id=str(uuid.uuid4()),
+        type="RES_CHUNK",
+        from_agent=from_id,
+        to_agent=req.from_agent,
+        refs=[req.id],
+        intent=req.intent,
+        payload=payload or {},
+        status=status,
+        fault=fault,
+        chunk_seq=chunk_seq,
+        chunk_final=chunk_final,
+    )
+    sig = crypto.sign(canonical_json(msg.signable_dict()), from_private_key)
+    msg.signature = base64.b64encode(sig).decode("ascii")
     return msg
 
 
