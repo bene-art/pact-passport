@@ -533,4 +533,23 @@ It is:
 
 ## One-Line Summary
 
-> PACT is two message types, holder-bound capabilities, and self-certifying identity — everything else is built at the edges.
+> PACT is three message types (REQ / RES / RES_CHUNK), holder-bound capabilities, and self-certifying identity — everything else is built at the edges.
+
+---
+
+## v0.5 Update Note (added 2026-05-03)
+
+The body of this document was written before v0.2-v0.5. The protocol has
+since gained:
+
+- A third message type: `RES_CHUNK` for streaming responses
+- Three new optional REQ fields: `identity_doc` (TOFU), `cap_envelope`
+  (cross-machine delegation), `stream` (request streaming)
+- Fail-closed verification rules and rotation-continuity refresh
+- New standard fault codes: `unknown_peer`, `holder_proof_required`,
+  `cap_unknown`, `handler_error`
+
+The formal contract for these additions lives in
+[`spec/PACT_v1.md` §12](../spec/PACT_v1.md). The implementation tracks
+that spec; this conceptual doc is preserved as the historical "why"
+narrative.

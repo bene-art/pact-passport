@@ -14,6 +14,21 @@ Incoming PACT REQ messages with intent:"task" are converted to LAK Messages
 and yielded from listen(). The agent's LLM response is sent back as a PACT RES.
 
 Requires: pip install pact-protocol[lak]
+
+**Known limitations** (will be addressed in future v0.x releases):
+
+- The bridge replaces the dispatch entry point, which means PACT-side
+  validation (sender verification, capability check, holder proof,
+  rate limit) is **bypassed** for task intents. Callers are presumed
+  trusted by the surrounding LAN setup. Do not expose a LAK-bridged
+  agent to untrusted networks until validation is layered in.
+- Bridged dispatch uses a sync polling wait (100ms × 300 iterations)
+  for the LAK response. This blocks an HTTP handler thread per
+  outstanding LAK call. Use the async server (`AsyncPACTServer`) if
+  you need higher concurrency.
+- The new v0.2-v0.5 message fields (`identity_doc`, `cap_envelope`,
+  `stream`) are not propagated to the LAK side. LAK responses are
+  one-shot only; no streaming RES_CHUNK support.
 """
 
 from __future__ import annotations
@@ -98,7 +113,12 @@ class PACTChannel:
                 fault={"code": "timeout", "detail": "LAK agent did not respond in time"},
             ).to_dict()
 
-        self._pact._server_dispatch = bridged_dispatch
+        # Replace the agent's dispatch with our bridged version.
+        # PACTServer reads this attribute when starting (agent.py:serve);
+        # setting it here means the server picks up bridged_dispatch.
+        # Pre-v0.5.1 this assigned to a non-existent _server_dispatch,
+        # silently no-op'ing the bridge.
+        self._pact._dispatch = bridged_dispatch
         self._pact.serve(blocking=False)
 
     async def stop(self) -> None:

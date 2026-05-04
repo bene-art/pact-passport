@@ -407,4 +407,120 @@ Test vectors are provided in `tests/vectors/pact_v1_vectors.json`. They include:
 - REQ and RES messages with holder proofs
 - Receipts
 
+---
+
+## 12. v0.2 — v0.5 Addendum (the parts §1–§11 don't describe)
+
+Sections 1–11 above were frozen at v0.1 and represent the original
+protocol design. Releases v0.2 through v0.5 added the fields and rules
+below. The reference implementation is the source of truth; this
+addendum exists so an alternate implementer doesn't have to read
+agent.py to know what they're missing.
+
+### 12.1 Three message types (§6.1 update)
+
+PACT now has **three** message types: `REQ`, `RES`, and `RES_CHUNK`.
+
+`RES_CHUNK` is the streaming response variant. A REQ with `stream: true`
+expects a sequence of one or more `RES_CHUNK` messages instead of a
+single `RES`. Each chunk is a fully-formed signed PACTMessage.
+
+### 12.2 New REQ fields (§6.2 update)
+
+| Field | Type | When to include | Purpose |
+|---|---|---|---|
+| `identity_doc` | object | First contact OR after rotation | Trust-on-first-use OR rotation-continuity refresh |
+| `cap_envelope` | object | When the receiver may not have the cap locally | Inline cap dict for cross-machine delegation |
+| `stream` | bool | When the client wants a streaming response | Opt-in to RES_CHUNK sequence |
+
+**Mandatory rule (v0.2.0):** when `cap_id` is present, `holder_proof`
+MUST also be present and verify against the sender's pubkey. Receivers
+MUST reject with fault code `holder_proof_required` otherwise.
+
+**Trust-on-first-use (v0.2.0):** when the receiver does not have the
+sender in its peer cache AND `identity_doc` is present, the receiver
+MUST verify that `agent_id == sha256(alg || base64(public_key))` from
+the doc. If valid, the doc is cached and the message signature is
+verified against the doc's pubkey. If absent or invalid, the receiver
+MUST reject with `unknown_peer`.
+
+**Rotation continuity (v0.3.1):** when an established peer rotates
+keys, the first post-rotation REQ should include the fresh
+`identity_doc`. The receiver detects signature failure, then verifies
+`hash(new_doc.public_key) == cached_doc.next_key_digest`. If the
+continuity proof holds, the cache is refreshed and verification
+retries against the new pubkey. If it fails, treated as attack.
+
+### 12.3 RES_CHUNK schema (§6.3 update)
+
+```
+{
+  "id":          "<uuid>",
+  "type":        "RES_CHUNK",
+  "from_agent":  "<server_agent_id>",
+  "to_agent":    "<client_agent_id>",
+  "refs":        ["<original_REQ_id>"],
+  "intent":      "task",
+  "payload":     { ... },        // chunk content
+  "chunk_seq":   <int>,          // monotonic, starts at 0
+  "chunk_final": <bool>,         // true on terminal chunk only
+  "alg":         "Ed25519",
+  "signature":   "<base64>"
+}
+```
+
+Each chunk is independently signed. Tampering with any field —
+including `chunk_seq` or `chunk_final` — invalidates that chunk's
+signature without affecting others. Receivers MUST verify each chunk
+independently as it arrives.
+
+### 12.4 Streaming transport
+
+Streaming responses are sent as `Content-Type: application/x-ndjson`
+over HTTP `Transfer-Encoding: chunked`. Each line is one fully-formed
+RES_CHUNK in JSON. Chunks SHOULD arrive in monotonic `chunk_seq` order;
+out-of-order arrival is a transport bug, not a protocol property.
+
+### 12.5 Updated fault codes (§6.3 update)
+
+Additional standard fault codes introduced in v0.2-v0.5:
+
+| Code | When |
+|---|---|
+| `unknown_peer` | Sender not in peer cache and no `identity_doc` provided |
+| `holder_proof_required` | `cap_id` present, `holder_proof` absent |
+| `cap_unknown` | `cap_id` claimed but neither in local store nor inline `cap_envelope` |
+| `handler_error` | The application handler raised an exception |
+
+### 12.6 Verification rules update (§5.4)
+
+Capability chain verification is fail-closed: if any link's pubkey is
+absent from `known_keys`, the verifier MUST return invalid (reason
+`Cannot verify: missing key for delegator <id>`). Pre-v0.2.0
+implementations silently skipped checks for missing keys, which
+admitted forged chains.
+
+### 12.7 Cap envelope inline (v0.4.0)
+
+When the receiver does not have the cap locally and `cap_envelope` is
+present, the receiver MUST:
+
+1. Verify `cap_envelope.cap_id == msg.cap_id`
+2. Verify `cap_envelope.issuer` is the receiver's own agent_id
+3. Gather pubkeys for all chain delegators from peer cache
+4. Run §5.4 verification with those known_keys
+5. On success, cache the cap locally and dispatch
+6. On failure, reject with `capability_invalid`
+
+If `cap_id` is present without local cap and without `cap_envelope`,
+receivers MUST reject with `cap_unknown` (do not silently fall through
+to action-name dispatch).
+
+### 12.8 Durable state (v0.3.0)
+
+Reference-implementation guidance: idempotency cache and per-cap
+invocation counts SHOULD persist across agent restarts. The
+spec-level contract (idempotent dedup, max_invocations enforcement)
+is process-independent; how it's stored is implementation-defined.
+
 An implementation that produces identical outputs for these inputs is interoperable.
