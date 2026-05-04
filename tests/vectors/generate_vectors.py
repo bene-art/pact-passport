@@ -231,6 +231,217 @@ def main():
         "signed": receipt_signed,
     }
 
+    # ============================================================
+    # v0.2 — v0.5 vectors (added 2026-05-03, see spec/PACT_v1.md §12)
+    # ============================================================
+
+    # --- 11. Rotation event (post-inception, sequence=1) ---
+    # Agent A's pre-rotation commitment is in the inception event;
+    # for the test vector we use a fresh "next" key derived from a
+    # different fixed seed.
+    seed_a_next = "1" * 64  # 32 bytes of 0x11
+    seed_a_fresh_next = "2" * 64  # 32 bytes of 0x22
+    priv_a_next, pub_a_next = keypair_from_seed(seed_a_next)
+    _, pub_a_fresh_next = keypair_from_seed(seed_a_fresh_next)
+    pub_a_next_b64 = base64.b64encode(pub_a_next).decode()
+
+    # Re-derive inception with a known next_keys_digest for chaining
+    inception_with_next = {
+        "agent_id": agent_id_a,
+        "event_type": "inception",
+        "sequence": 0,
+        "current_keys": [pub_a_b64],
+        "next_keys_digest": crypto.sha256_digest(pub_a_next),
+        "alg": crypto.ALG,
+    }
+    inception_with_next_canonical = canonical_json(inception_with_next)
+    inception_with_next_sig = crypto.sign(inception_with_next_canonical, priv_a)
+    inception_with_next["signature"] = base64.b64encode(inception_with_next_sig).decode()
+    prior_signable = {k: v for k, v in inception_with_next.items() if k != "signature"}
+    prior_digest = crypto.sha256_digest(canonical_json(prior_signable))
+
+    rotation = {
+        "agent_id": agent_id_a,
+        "event_type": "rotation",
+        "sequence": 1,
+        "prior_event_digest": prior_digest,
+        "current_keys": [pub_a_next_b64],
+        "next_keys_digest": crypto.sha256_digest(pub_a_fresh_next),
+        "alg": crypto.ALG,
+    }
+    rotation_canonical = canonical_json(rotation)
+    # Rotation event is signed with the NEW key (pre-rotated), not old
+    rotation_sig = crypto.sign(rotation_canonical, priv_a_next)
+    rotation_signed = dict(rotation)
+    rotation_signed["signature"] = base64.b64encode(rotation_sig).decode()
+
+    vectors["rotation_event"] = {
+        "prior_inception": inception_with_next,
+        "unsigned": rotation,
+        "canonical_bytes_hex": rotation_canonical.hex(),
+        "signature_b64": base64.b64encode(rotation_sig).decode(),
+        "signed": rotation_signed,
+        "note": "rotation event is signed by the NEW current key (pre-rotated commitment)",
+    }
+
+    # --- 12. Attenuated capability token (delegation chain length 1) ---
+    # Alice issues to Bob (root, in vectors[capability_token] above).
+    # Bob attenuates and grants to Charlie with tighter max_invocations.
+    chain_link_sig = crypto.sign("test-cap-001".encode(), priv_b)
+
+    attenuated_cap = {
+        "cap_id": "test-cap-002-attenuated",
+        "issuer": agent_id_a,  # root issuer preserved
+        "holder": agent_id_c,
+        "action": "read_data",
+        "caveats": [
+            {"restrict": "expires", "value": "2099-12-31T23:59:59+00:00"},
+            {"restrict": "max_invocations", "value": 10},
+            {"restrict": "max_invocations", "value": 3},  # tighter than parent
+        ],
+        "parent": "test-cap-001",
+        "delegation_chain": [
+            {"from": agent_id_b, "sig": base64.b64encode(chain_link_sig).decode()},
+        ],
+        "alg": crypto.ALG,
+    }
+    attenuated_canonical = canonical_json(attenuated_cap)
+    attenuated_sig = crypto.sign(attenuated_canonical, priv_b)  # signed by delegator
+    attenuated_signed = dict(attenuated_cap)
+    attenuated_signed["signature"] = base64.b64encode(attenuated_sig).decode()
+
+    vectors["attenuated_capability"] = {
+        "unsigned": attenuated_cap,
+        "canonical_bytes_hex": attenuated_canonical.hex(),
+        "signature_b64": base64.b64encode(attenuated_sig).decode(),
+        "signed": attenuated_signed,
+        "note": "attenuated cap signed by the last delegator (Bob), not the root issuer",
+    }
+
+    # --- 13. REQ with identity_doc (TOFU handshake, v0.2.0) ---
+    identity_doc_for_b = {
+        "agent_id": agent_id_b,
+        "alg": crypto.ALG,
+        "public_key": pub_b_b64,
+        "next_key_digest": crypto.sha256_digest(pub_a_next),  # arbitrary commitment
+    }
+    req_with_doc = {
+        "id": "test-msg-tofu-001",
+        "type": "REQ",
+        "from_agent": agent_id_b,
+        "to_agent": agent_id_a,
+        "refs": [],
+        "intent": "task",
+        "deadline": "2099-12-31T23:59:59+00:00",
+        "idempotency_key": "test-idem-tofu-001",
+        "payload": {"action": "ping"},
+        "identity_doc": identity_doc_for_b,
+        "alg": crypto.ALG,
+    }
+    req_doc_canonical = canonical_json(req_with_doc)
+    req_doc_sig = crypto.sign(req_doc_canonical, priv_b)
+    req_doc_signed = dict(req_with_doc)
+    req_doc_signed["signature"] = base64.b64encode(req_doc_sig).decode()
+
+    vectors["req_with_identity_doc"] = {
+        "unsigned": req_with_doc,
+        "canonical_bytes_hex": req_doc_canonical.hex(),
+        "signature_b64": base64.b64encode(req_doc_sig).decode(),
+        "signed": req_doc_signed,
+        "note": "TOFU handshake — receiver verifies agent_id derives from doc.public_key",
+    }
+
+    # --- 14. REQ with cap_envelope (cross-machine delegation, v0.4.0) ---
+    req_with_envelope = {
+        "id": "test-msg-env-001",
+        "type": "REQ",
+        "from_agent": agent_id_c,
+        "to_agent": agent_id_a,
+        "refs": [],
+        "intent": "task",
+        "cap_id": "test-cap-002-attenuated",
+        "deadline": "2099-12-31T23:59:59+00:00",
+        "idempotency_key": "test-idem-env-001",
+        "payload": {"action": "read_data"},
+        "cap_envelope": attenuated_signed,
+        "alg": crypto.ALG,
+    }
+    holder_proof_c = crypto.sign(req_with_envelope["id"].encode(), priv_c)
+    req_with_envelope["holder_proof"] = base64.b64encode(holder_proof_c).decode()
+    req_env_canonical = canonical_json(req_with_envelope)
+    req_env_sig = crypto.sign(req_env_canonical, priv_c)
+    req_env_signed = dict(req_with_envelope)
+    req_env_signed["signature"] = base64.b64encode(req_env_sig).decode()
+
+    vectors["req_with_cap_envelope"] = {
+        "unsigned": req_with_envelope,
+        "canonical_bytes_hex": req_env_canonical.hex(),
+        "signature_b64": base64.b64encode(req_env_sig).decode(),
+        "signed": req_env_signed,
+        "note": "Carol presents Bob-attenuated cap to Alice, including full envelope",
+    }
+
+    # --- 15. RES_CHUNK messages (streaming, v0.5.0) ---
+    chunks = []
+    for i in range(3):
+        chunk = {
+            "id": f"test-chunk-{i:03d}",
+            "type": "RES_CHUNK",
+            "from_agent": agent_id_a,
+            "to_agent": agent_id_b,
+            "refs": ["test-msg-stream-001"],
+            "intent": "task",
+            "payload": {"text": f"chunk {i}"},
+            "status": "ok",
+            "chunk_seq": i,
+            "chunk_final": i == 2,
+            "alg": crypto.ALG,
+        }
+        chunk_canonical = canonical_json(chunk)
+        chunk_sig = crypto.sign(chunk_canonical, priv_a)
+        chunk_signed = dict(chunk)
+        chunk_signed["signature"] = base64.b64encode(chunk_sig).decode()
+        chunks.append({
+            "unsigned": chunk,
+            "canonical_bytes_hex": chunk_canonical.hex(),
+            "signature_b64": base64.b64encode(chunk_sig).decode(),
+            "signed": chunk_signed,
+        })
+
+    vectors["res_chunks"] = {
+        "stream": chunks,
+        "note": "each chunk independently signed; tampering with chunk_seq or chunk_final invalidates that chunk only",
+    }
+
+    # --- 16. Error RES with fault (v0.2.0+ standard codes) ---
+    error_res = {
+        "id": "test-msg-err-001",
+        "type": "RES",
+        "from_agent": agent_id_a,
+        "to_agent": agent_id_b,
+        "refs": ["test-msg-001"],
+        "intent": "task",
+        "payload": {},
+        "status": "error",
+        "fault": {
+            "code": "holder_proof_required",
+            "detail": "holder_proof is mandatory when cap_id is present",
+        },
+        "alg": crypto.ALG,
+    }
+    error_canonical = canonical_json(error_res)
+    error_sig = crypto.sign(error_canonical, priv_a)
+    error_signed = dict(error_res)
+    error_signed["signature"] = base64.b64encode(error_sig).decode()
+
+    vectors["error_res"] = {
+        "unsigned": error_res,
+        "canonical_bytes_hex": error_canonical.hex(),
+        "signature_b64": base64.b64encode(error_sig).decode(),
+        "signed": error_signed,
+        "note": "v0.2.0+ standard fault codes: unknown_peer, holder_proof_required, cap_unknown, handler_error",
+    }
+
     print(json.dumps(vectors, indent=2))
 
 

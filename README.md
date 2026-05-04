@@ -7,14 +7,16 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Two message types — REQ and RES. Everything else is built at the edges.
+Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Three message types — REQ, RES, RES_CHUNK. Everything else is built at the edges.
 
-> **Status:** v0.2.0 — security hardening complete. The three critical authorization-bypass paths (issues #2, #3, #8) tracked in v0.1.x are now closed. Remaining v0.2 issues are durability and operational hardening. Suitable for use within a single trust domain (your own machines on a LAN). Production deployment across trust boundaries should still wait until issue #4 (rotation) and #5 (durable idempotency) land.
+> **Status:** v0.5.x — feature-complete for v0.x scope. All actionable issues from the v0.1 case study are closed: auth-bypass triangle (#2/#3/#8), durability (#5), rotation refresh (#4), wire-level delegation (#10), streaming (#11), DoS hardening (#9), Windows compat (#6), dispatch readability (#13). 0 documented xfails. Three-platform tested (macOS, Linux, Windows).
 
-> **Breaking changes vs v0.1.x:**
-> - `holder_proof` is now mandatory when `cap_id` is present (issue #3)
-> - REQs from unknown peers are rejected unless they include an inline `identity_doc` for trust-on-first-use (issue #2)
-> - `verify_capability` fails closed when delegation chain keys are missing (issue #8)
+> **Breaking changes from v0.1 → v0.5:**
+> - `holder_proof` is mandatory when `cap_id` is present (v0.2.0, issue #3)
+> - REQs from unknown peers are rejected unless they include `identity_doc` for trust-on-first-use (v0.2.0, issue #2)
+> - `verify_capability` fails closed when delegation chain keys are missing (v0.2.0, issue #8)
+> - `cap_id` claimed without local cap or `cap_envelope` is rejected explicitly instead of silently falling through (v0.4.0, issue #10)
+> - `auto_grant` constructor parameter is now a no-op (v0.5.1) — was always dead code, kept for back-compat
 
 ## What is PACT Passport?
 
@@ -128,15 +130,18 @@ contrib/
   lak_channel.py         local-agent-kit integration
 ```
 
-## Features by Phase
+## Features by Release
 
-| Phase | Feature | Status |
-|-------|---------|--------|
-| 1 | Identity, capabilities, REQ/RES, receipts, mDNS, CLI | Done |
-| 2 | Capability attenuation (A→B→C), explicit grants, idempotency, DAG traversal | Done |
-| 3 | Key rotation, rate limiting (max_invocations), `pact doctor` | Done |
-| 4 | Formal spec (`spec/PACT_v1.md`), deterministic test vectors, interop suite | Done |
-| 5 | CBOR encoding, async uvicorn server, local-agent-kit integration | Done |
+| Release | Feature | Status |
+|---|---|---|
+| v0.1 | Identity, capabilities, REQ/RES, receipts, mDNS, CLI, formal spec, test vectors | Done |
+| v0.2.0 | Auth-bypass-by-default closed: TOFU handshake (`identity_doc`), mandatory holder-proof, fail-closed chain verification | Done |
+| v0.2.1 | Request size limit + read timeout (slow-loris defense), Windows compat, dispatch decomposition (pipeline of validators) | Done |
+| v0.3.0 | Durable idempotency cache + invocation counts (per-agent JSON, LRU bound) | Done |
+| v0.3.1 | Rotation peer refresh via KERI continuity check | Done |
+| v0.4.0 | Cap envelope inline (`cap_envelope`) — three-agent delegation works end-to-end over the wire | Done |
+| v0.5.0 | Streaming RES_CHUNK responses (NDJSON over chunked transfer encoding) | Done |
+| v0.5.1 | Polish: docs, exports, async-server parity, CI matrix | Done |
 
 ## Tests
 
@@ -145,17 +150,15 @@ pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-118 tests + 1 documented xfail covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain, determinism, and 5 race-condition scenarios under concurrent dispatch.
+141 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, and RES_CHUNK streaming.
 
 ### Platform support
 
 | Platform | Status |
 |---|---|
-| **macOS** (Darwin) | 131 passed |
-| **Linux** (Alpine on WSL2) | 131 passed |
-| **Windows 11** | 127 passed, 4 skipped (POSIX-only checks) |
-
-Rotation peer-cache-staleness (formerly tracked as the only xfail) was fixed in v0.3.1. See [#4](https://github.com/bene-art/pact-passport/issues/4).
+| **macOS** | 141 passed |
+| **Linux** (CI + Alpine on WSL2) | 141 passed |
+| **Windows 11** | 137 passed, 4 skipped (POSIX-only checks) |
 
 ### Concurrency stress mode
 

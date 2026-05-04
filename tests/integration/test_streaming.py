@@ -164,6 +164,37 @@ def test_streaming_replay_returns_same_chunks(sandbox):
     assert len(chunks_2) == 3
 
 
+def test_handler_returning_list_is_not_streamed(sandbox):
+    """Regression: pre-v0.5.1 dispatch detected streaming via __iter__
+    which matched lists, strings, tuples, etc. A handler returning a
+    list was mistakenly streamed. v0.5.1 narrows to inspect.isgenerator
+    so only true generators stream.
+
+    A handler returning a list should be treated as a one-shot result
+    and wrapped in {"result": [...]} like any non-dict return.
+    """
+    alice = sandbox["alice"]
+    bob = sandbox["bob"]
+
+    @bob["agent"].handle("returns_list")
+    def returns_list(payload):
+        return ["a", "b", "c"]  # list, NOT a generator
+
+    req = build_req(
+        from_private_key=alice["identity"]._private_key,
+        from_id=alice["agent_id"],
+        to_id=bob["agent_id"],
+        intent="task",
+        payload={"action": "returns_list"},
+    )
+    chunks = list(send_message_streaming(bob["url"], req))
+    # Should be exactly one item — the one-shot RES wrapping the list
+    assert len(chunks) == 1
+    res = chunks[0]
+    assert res["type"] == "RES"
+    assert res["payload"] == {"result": ["a", "b", "c"]}
+
+
 def test_streaming_one_shot_handler_still_works(sandbox):
     """A handler that returns a dict (not generator) under stream=True
     still works — the receiver gets the one-shot response. Streaming

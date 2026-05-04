@@ -64,7 +64,7 @@ class PACTAgent:
         store_dir: Path | None = None,
         host: str = "0.0.0.0",
         port: int = 0,
-        auto_grant: bool = True,
+        auto_grant: bool = True,  # deprecated v0.5.1 — has no effect
         idempotency_cache_max: int = 10_000,
     ):
         self.name = name
@@ -340,10 +340,11 @@ class PACTAgent:
         except Exception as e:
             return self._dispatch_err(ctx, "handler_error", str(e))
 
-        # Streaming path: handler returned a generator/iterator. The
-        # dispatcher yields signed RES_CHUNK dicts; the HTTP layer
-        # writes them as NDJSON over chunked transfer encoding (issue #11).
-        if inspect.isgenerator(result) or (hasattr(result, "__iter__") and not isinstance(result, dict)):
+        # Streaming path: handler returned a generator. We detect
+        # specifically via inspect.isgenerator — NOT __iter__, which
+        # would match lists, tuples, strings, dicts, etc. and stream
+        # them incorrectly. Returning a generator is the contract.
+        if inspect.isgenerator(result):
             return self._run_streaming_handler(ctx, result)
 
         # One-shot path (existing).
@@ -592,11 +593,13 @@ class PACTAgent:
             if peer:
                 self._store.save_peer(agent_info["agent_id"], peer)
 
-        # Auto-handshake: get or create capability
+        # Find a locally-stored capability for this issuer+action, if any.
+        # Pre-v0.5.1 this had an `auto_grant` fallback path that called
+        # an empty stub; the stub returned None unconditionally, so the
+        # parameter was dead code. Removed in v0.5.1. To grant a peer
+        # the right to call you, use `self.grant(holder_id, action, ...)`
+        # explicitly before the peer sends its REQ.
         cap = self._find_capability_for(agent_info["agent_id"], action)
-        if not cap and self.auto_grant:
-            # Request a capability via the discover flow
-            cap = self._request_auto_grant(base_url, identity, agent_info, action)
 
         # Build and send task REQ
         msg = build_req(
@@ -636,20 +639,6 @@ class PACTAgent:
                 return cap
         return None
 
-    def _request_auto_grant(
-        self, base_url: str, identity: Identity, agent_info: dict, action: str
-    ) -> CapabilityToken | None:
-        """Request an auto-granted capability from the target agent.
-
-        In Phase 1, the target auto-issues capabilities. We send an identity
-        exchange + discover, and the target issues a cap in the response.
-        For now, we create a self-issued stub that the target will honor
-        via auto-grant mode.
-        """
-        # In auto-grant mode (Phase 1), the server accepts requests without
-        # a capability token if it has a handler for the action.
-        # We return None here and the server will dispatch based on payload.action.
-        return None
 
     @staticmethod
     def _get_max_invocations(token: CapabilityToken) -> int | None:

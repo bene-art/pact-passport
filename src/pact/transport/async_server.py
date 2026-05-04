@@ -2,6 +2,12 @@
 
 Optional upgrade from ThreadingHTTPServer. Same endpoints, async dispatch.
 Requires: pip install pact-protocol[fast]
+
+v0.5.1 brought to parity with the sync server: max_body_bytes (#9),
+streaming RES_CHUNK (#11). Read timeout is enforced by uvicorn's
+http_protocol_class (set via timeout_keep_alive); explicit per-request
+read timeout would require monkeypatching uvicorn internals — left for
+a later release.
 """
 
 from __future__ import annotations
@@ -9,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Callable
+from typing import Callable, Iterator
 
 from pact._canonical import (
     encode_message, decode_message,
@@ -18,10 +24,14 @@ from pact._canonical import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_BODY_BYTES = 1024 * 1024  # 1 MB
+DEFAULT_READ_TIMEOUT = 30.0  # seconds (passed to uvicorn timeout_keep_alive)
+
 
 def _make_asgi_app(
     dispatch: Callable[[dict], dict] | None = None,
     identity_doc: dict | None = None,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> Callable:
     """Create a raw ASGI application for PACT.
 
@@ -35,11 +45,27 @@ def _make_asgi_app(
         method = scope["method"]
         path = scope["path"]
 
-        # Read request body
+        # Read request body, enforcing max_body_bytes (#9). We accumulate
+        # incrementally and reject as soon as the cap is exceeded so a
+        # malicious Content-Length: 10GB doesn't actually allocate 10GB.
         body = b""
         while True:
             msg = await receive()
             body += msg.get("body", b"")
+            if len(body) > max_body_bytes:
+                await send({
+                    "type": "http.response.start",
+                    "status": 413,
+                    "headers": [[b"content-type", b"application/json"]],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": json.dumps({
+                        "error": "request too large",
+                        "max_bytes": max_body_bytes,
+                    }).encode(),
+                })
+                return
             if not msg.get("more_body", False):
                 break
 
@@ -68,6 +94,34 @@ def _make_asgi_app(
                 "body": resp_body,
             })
 
+        async def send_stream(chunks_iter: Iterator[dict]):
+            """Stream RES_CHUNK dicts as NDJSON (#11). One http.response.body
+            event per chunk with more_body=True until the final chunk."""
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    [b"content-type", b"application/x-ndjson"],
+                ],
+            })
+            try:
+                buffered = list(chunks_iter)
+                for i, chunk in enumerate(buffered):
+                    line = (json.dumps(chunk) + "\n").encode("utf-8")
+                    is_last = i == len(buffered) - 1
+                    await send({
+                        "type": "http.response.body",
+                        "body": line,
+                        "more_body": not is_last,
+                    })
+            except Exception:
+                logger.exception("stream dispatch error")
+                # Best-effort terminate
+                try:
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+                except Exception:
+                    pass
+
         # Route
         if method == "GET" and path == "/pact/v1/health":
             agent_id = (identity_doc or {}).get("agent_id", "unknown")
@@ -93,7 +147,12 @@ def _make_asgi_app(
             if dispatch:
                 try:
                     result = dispatch(parsed)
-                    await send_response(result)
+                    # Streaming path: dispatch returned a generator (#11).
+                    # Same detection contract as the sync server.
+                    if hasattr(result, "__next__") and not isinstance(result, dict):
+                        await send_stream(result)
+                    else:
+                        await send_response(result)
                 except Exception as e:
                     logger.exception("Dispatch error")
                     await send_response({"error": str(e)}, 500)
@@ -111,6 +170,9 @@ class AsyncPACTServer:
 
     Drop-in replacement for PACTServer with better concurrency.
     Requires: pip install pact-protocol[fast]
+
+    v0.5.1: gains max_body_bytes (issue #9) and streaming response
+    support (issue #11). Brings parity with the sync PACTServer.
     """
 
     def __init__(
@@ -119,11 +181,15 @@ class AsyncPACTServer:
         port: int = 0,
         dispatch: Callable[[dict], dict] | None = None,
         identity_doc: dict | None = None,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
     ):
         self.host = host
         self.port = port
         self._dispatch = dispatch
         self._identity_doc = identity_doc
+        self._max_body_bytes = max_body_bytes
+        self._read_timeout = read_timeout
         self._server = None
         self._thread: threading.Thread | None = None
 
@@ -136,7 +202,9 @@ class AsyncPACTServer:
                 "Async server requires uvicorn. Install with: pip install pact-protocol[fast]"
             )
 
-        app = _make_asgi_app(self._dispatch, self._identity_doc)
+        app = _make_asgi_app(
+            self._dispatch, self._identity_doc, self._max_body_bytes,
+        )
 
         # Use port 0 trick: bind to find a free port
         if self.port == 0:
@@ -151,6 +219,7 @@ class AsyncPACTServer:
             host=self.host,
             port=self.port,
             log_level="warning",
+            timeout_keep_alive=int(self._read_timeout),
         )
         self._server = uvicorn.Server(config)
 
