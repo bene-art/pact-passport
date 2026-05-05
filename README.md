@@ -9,7 +9,7 @@
 
 Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Three message types — REQ, RES, RES_CHUNK. Everything else is built at the edges.
 
-> **Status:** v0.5.x — feature-complete for v0.x scope. All actionable issues from the v0.1 case study are closed: auth-bypass triangle (#2/#3/#8), durability (#5), rotation refresh (#4), wire-level delegation (#10), streaming (#11), DoS hardening (#9), Windows compat (#6), dispatch readability (#13). 0 documented xfails. Three-platform tested (macOS, Linux, Windows).
+> **Status:** v0.5.2 — feature-complete for v0.x scope. All actionable issues from the v0.1 case study are closed (auth-bypass triangle #2/#3/#8, durability #5, rotation refresh #4, wire-level delegation #10, streaming #11, DoS hardening #9, Windows compat #6, dispatch readability #13). v0.5.2 closes four gaps surfaced by two-node cluster testing: signed `outcome=failed` receipts on dispatch errors, `HandlerFailure` exception for explicit handler-failure signaling, `cap_envelope` foot-gun closed (now requires `cap_id`), and a server-side `max_deadline_seconds` ceiling. 0 documented xfails. Three-platform tested (macOS, Linux, Windows).
 
 > **Breaking changes from v0.1 → v0.5:**
 > - `holder_proof` is mandatory when `cap_id` is present (v0.2.0, issue #3)
@@ -17,6 +17,8 @@ Self-certifying identity, holder-bound capabilities, and unilateral audit receip
 > - `verify_capability` fails closed when delegation chain keys are missing (v0.2.0, issue #8)
 > - `cap_id` claimed without local cap or `cap_envelope` is rejected explicitly instead of silently falling through (v0.4.0, issue #10)
 > - `auto_grant` constructor parameter is now a no-op (v0.5.1) — was always dead code, kept for back-compat
+> - `build_req(cap_envelope=...)` without an explicit `cap_id` now auto-derives `cap_id` from the envelope, or raises `ValueError` if the envelope lacks one. Previously the envelope was silently transported without verification (v0.5.2)
+> - REQs with deadlines further than `max_deadline_seconds` (default 3600s) in the future are rejected with new fault code `deadline_too_far`. Bump the constructor arg for long-running streaming intents (v0.5.2)
 
 ## What is PACT Passport?
 
@@ -142,6 +144,7 @@ contrib/
 | v0.4.0 | Cap envelope inline (`cap_envelope`) — three-agent delegation works end-to-end over the wire | Done |
 | v0.5.0 | Streaming RES_CHUNK responses (NDJSON over chunked transfer encoding) | Done |
 | v0.5.1 | Polish: docs, exports, async-server parity, CI matrix | Done |
+| v0.5.2 | Honesty patch: signed `outcome=failed` receipts (E1), `HandlerFailure` for explicit failure signaling (E2), `cap_envelope` foot-gun closed (E11), server-side `max_deadline_seconds` ceiling (E7). All four gaps surfaced by cluster testing. | Done |
 
 ## Tests
 
@@ -150,15 +153,15 @@ pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-141 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, and RES_CHUNK streaming.
+149 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, RES_CHUNK streaming, and the v0.5.2 honesty-patch suite (signed-failed-receipts, HandlerFailure, cap_envelope auto-derive, deadline ceiling).
 
 ### Platform support
 
 | Platform | Status |
 |---|---|
-| **macOS** | 141 passed |
-| **Linux** (CI + Alpine on WSL2) | 141 passed |
-| **Windows 11** | 137 passed, 4 skipped (POSIX-only checks) |
+| **macOS** | 149 passed |
+| **Linux** (CI + Alpine on WSL2) | 149 passed |
+| **Windows 11** | 145 passed, 4 skipped (POSIX-only checks) |
 
 ### Concurrency stress mode
 
