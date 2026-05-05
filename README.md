@@ -20,21 +20,41 @@ Self-certifying identity, holder-bound capabilities, and unilateral audit receip
 > - `build_req(cap_envelope=...)` without an explicit `cap_id` now auto-derives `cap_id` from the envelope, or raises `ValueError` if the envelope lacks one. Previously the envelope was silently transported without verification (v0.5.2)
 > - REQs with deadlines further than `max_deadline_seconds` (default 3600s) in the future are rejected with new fault code `deadline_too_far`. Bump the constructor arg for long-running streaming intents (v0.5.2)
 
-## What is PACT Passport?
+## Overview
 
-If MCP and A2A are how agents *talk*, PACT Passport is how they *prove who they are*. Each agent gets a self-certifying identity (Ed25519 keypair, agent_id derived from the public key). Authority is granted via holder-bound capability tokens that can only be tightened down a delegation chain, never widened. Every exchange produces signed audit receipts on both sides — independently verifiable, no central registry required.
+PACT Passport is a Python implementation of a minimal trust substrate for agent-to-agent interaction. It sits below orchestration protocols like MCP and A2A as the layer that answers *who is this agent, what can they do, and what did they do*. Three primitives — self-certifying identity, holder-bound capability tokens, signed messages — plus unilateral audit receipts. No central authority, no shared secrets, no registry.
 
-PACT (Protocol for Agent Capability and Trust) sits **below** orchestration protocols like MCP and A2A as the **trust substrate** — the layer where identity is self-certifying, authority is holder-bound and attenuable, ordering is causal, and failure is explicit.
+The reference implementation is ~3,750 LOC in `src/pact/`. The wire protocol is specified in [`spec/PACT_v1.md`](spec/PACT_v1.md) — sufficient for independent implementations. Deterministic test vectors at [`tests/vectors/pact_v1_vectors.json`](tests/vectors/pact_v1_vectors.json).
 
-### Three Primitives
+### Guarantees
 
-1. **Agent Identity** — Ed25519 keypair with self-certifying agent ID and pre-rotation key commitment. Identity survives key rotation without a central registry.
+| Property | Mechanism |
+|---|---|
+| Authenticity | Every message + receipt signed Ed25519 (PyNaCl). `verify_message` is fail-closed on malformed input. |
+| Identity | `agent_id = sha256(alg \|\| pubkey)`. Self-certifying; no CA. |
+| Key rotation | KERI-style pre-rotation via `next_key_digest`. First post-rotation message proves continuity. |
+| Authorization | Holder-bound capability tokens with append-only caveat chain. Stolen tokens require the holder's private key to present (`holder_proof`). |
+| Replay safety | Mandatory `idempotency_key` per REQ. Durable cache survives process restart. |
+| Causal ordering | `refs[]` field forms a DAG over message history. |
+| Liveness | Mandatory `deadline` with server-side enforcement and configurable upper bound (default 3600s). |
+| Audit | Bilateral signed receipts written for every dispatch — both `outcome=completed` and `outcome=failed` paths. |
 
-2. **Capability Token** — Signed, holder-bound proof of authority with delegation chains. Caveats can only restrict, never expand. Stolen tokens are useless without the holder's private key.
+### Primitives
 
-3. **Message** — Two types: REQ (request with capability proof) and RES (result or error). Message references form a causal DAG. Deadlines and idempotency keys are mandatory.
+| Primitive | What it is | Source |
+|---|---|---|
+| **Identity** | Ed25519 keypair with self-certifying `agent_id` derived from the pubkey, plus a `next_key_digest` commitment for KERI-style rotation. | `src/pact/identity.py` |
+| **Capability** | Signed, holder-bound token. Caveats append-only; chain verifies fail-closed. Three-agent delegation works inline via `cap_envelope`. | `src/pact/capability.py` |
+| **Message** | `REQ` / `RES` / `RES_CHUNK` (streaming). Mandatory `deadline` + `idempotency_key`. `refs[]` forms causal DAG. | `src/pact/message.py` |
+| **Receipt** | Unilateral signed record of every dispatch. `outcome` ∈ {`completed`, `failed`, `cancelled`}. Bilateral receipts share `task_ref` for cross-machine trace reconstruction. | `src/pact/receipt.py` |
 
-Plus: **unilateral audit receipts** — each agent signs their own view, no cooperation required.
+### Non-goals
+
+- **Cross-organization capability chains.** v0.5 enforces strict `issuer must be self`. Cross-org via a `trusted_issuers` set is post-v0.6.
+- **Application-level caveat enforcement.** Caveats validate structurally at issue/attenuate; handler-side enforcement is post-v0.6.
+- **Cross-machine revocation propagation.** Issuer-local only — no CRL, no push-REVOKE.
+- **Post-quantum signatures.** Ed25519 throughout. `crypto.py` is a single-file seam for the eventual migration.
+- **Per-token cost accounting.** Rate limits via `max_invocations` only. Token economics belong one layer up.
 
 ## Install
 
