@@ -550,7 +550,7 @@ It is:
 
 ---
 
-## v0.5 Update Note (added 2026-05-03, extended 2026-05-04 for v0.5.2)
+## v0.5 Update Note (added 2026-05-03, extended 2026-05-04 for v0.5.2 and v0.5.3)
 
 The body of this document was written before v0.2-v0.5. The protocol has
 since gained:
@@ -569,6 +569,15 @@ since gained:
   `max_deadline_seconds` ceiling (default 3600s) with new fault code
   `deadline_too_far`, and a documented single-issuer trust model
   (`issuer must be self` — cross-org caps deferred to v0.6+).
+- **v0.5.3:** input-validation honesty patch — verification routines
+  (`verify_message`, `verify_holder_proof`, `verify_receipt`,
+  `verify_capability`) fail closed on malformed base64 instead of
+  raising; TOFU rejects malformed `public_key` cleanly; `Content-Length`
+  is validated (negative or non-integer → 400, no more slow-loris
+  DoS via `read(-1)`); caveat values (`max_invocations`, `expires`)
+  validated at issue/attenuate time; streaming completion writes
+  idempotency cache before the receipt to avoid duplicate audit
+  entries on crash-and-retry.
 
 The formal contract for these additions lives in
 [`spec/PACT_v1.md` §12](../spec/PACT_v1.md). The implementation tracks

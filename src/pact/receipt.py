@@ -6,6 +6,7 @@ Each agent signs their own view. No cooperation required.
 from __future__ import annotations
 
 import base64
+import binascii
 from datetime import datetime, timezone
 
 from pact import crypto
@@ -46,7 +47,17 @@ def create_receipt(
 
 
 def verify_receipt(receipt: dict, public_key: bytes) -> bool:
-    """Verify a receipt's signature."""
-    sig_bytes = base64.b64decode(receipt["signature"])
+    """Verify a receipt's signature.
+
+    Returns False on missing/malformed signature rather than raising.
+    See v0.5.3 honesty patch — fail-closed on malformed input.
+    """
+    sig = receipt.get("signature")
+    if not sig:
+        return False
+    try:
+        sig_bytes = base64.b64decode(sig)
+    except (binascii.Error, ValueError, TypeError):
+        return False
     signable = {k: v for k, v in receipt.items() if k != "signature"}
     return crypto.verify(canonical_json(signable), sig_bytes, public_key)

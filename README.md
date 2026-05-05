@@ -9,7 +9,7 @@
 
 Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Three message types — REQ, RES, RES_CHUNK. Everything else is built at the edges.
 
-> **Status:** v0.5.2 — feature-complete for v0.x scope. All actionable issues from the v0.1 case study are closed (auth-bypass triangle #2/#3/#8, durability #5, rotation refresh #4, wire-level delegation #10, streaming #11, DoS hardening #9, Windows compat #6, dispatch readability #13). v0.5.2 closes four gaps surfaced by two-node cluster testing: signed `outcome=failed` receipts on dispatch errors, `HandlerFailure` exception for explicit handler-failure signaling, `cap_envelope` foot-gun closed (now requires `cap_id`), and a server-side `max_deadline_seconds` ceiling. 0 documented xfails. Three-platform tested (macOS, Linux, Windows).
+> **Status:** v0.5.3 — feature-complete for v0.x scope. All actionable issues from the v0.1 case study are closed (auth-bypass triangle #2/#3/#8, durability #5, rotation refresh #4, wire-level delegation #10, streaming #11, DoS hardening #9, Windows compat #6, dispatch readability #13). v0.5.2 closed four gaps surfaced by two-node cluster testing (signed failed-receipts, `HandlerFailure`, `cap_envelope` requires `cap_id`, deadline ceiling). v0.5.3 closes five input-validation gaps surfaced by an audit pass: negative `Content-Length` DoS, unhandled malformed-base64 in signature/holder-proof/receipt verifiers, no validation of `max_invocations` / `expires` caveat values, streaming write-order race, and TOFU base64 fault tolerance. 0 documented xfails. Three-platform tested (macOS, Linux, Windows).
 
 > **Breaking changes from v0.1 → v0.5:**
 > - `holder_proof` is mandatory when `cap_id` is present (v0.2.0, issue #3)
@@ -145,6 +145,7 @@ contrib/
 | v0.5.0 | Streaming RES_CHUNK responses (NDJSON over chunked transfer encoding) | Done |
 | v0.5.1 | Polish: docs, exports, async-server parity, CI matrix | Done |
 | v0.5.2 | Honesty patch: signed `outcome=failed` receipts (E1), `HandlerFailure` for explicit failure signaling (E2), `cap_envelope` foot-gun closed (E11), server-side `max_deadline_seconds` ceiling (E7). All four gaps surfaced by cluster testing. | Done |
+| v0.5.3 | Input-validation patch: negative `Content-Length` DoS closed (F1), malformed base64 in signature/holder-proof/receipt fails closed (F2), `max_invocations`/`expires` caveat values validated at issue/attenuate (F3), streaming write-order race fixed (F4), TOFU rejects malformed pubkey base64 (F5). | Done |
 
 ## Tests
 
@@ -153,15 +154,15 @@ pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-149 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, RES_CHUNK streaming, and the v0.5.2 honesty-patch suite (signed-failed-receipts, HandlerFailure, cap_envelope auto-derive, deadline ceiling).
+164 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, RES_CHUNK streaming, the v0.5.2 honesty-patch suite (signed-failed-receipts, HandlerFailure, cap_envelope auto-derive, deadline ceiling), and the v0.5.3 input-validation suite (Content-Length sanitization, malformed-base64 fail-closed, caveat-value validation, streaming write-order, TOFU fault tolerance).
 
 ### Platform support
 
 | Platform | Status |
 |---|---|
-| **macOS** | 149 passed |
-| **Linux** (CI + Alpine on WSL2) | 149 passed |
-| **Windows 11** | 145 passed, 4 skipped (POSIX-only checks) |
+| **macOS** | 164 passed |
+| **Linux** (CI + Alpine on WSL2) | 164 passed |
+| **Windows 11** | 160 passed, 4 skipped (POSIX-only checks) |
 
 ### Concurrency stress mode
 

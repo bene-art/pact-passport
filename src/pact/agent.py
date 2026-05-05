@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import inspect
 import logging
 import signal
@@ -441,21 +442,28 @@ class PACTAgent:
             chunk_dicts.append(err_chunk)
             yield err_chunk
 
-        # Persist + receipt after the stream completes.
+        # Persist + receipt after the stream completes. Order matters:
+        # idempotency cache MUST be written before the receipt. If the
+        # process crashes between the receipt write and the cache write,
+        # a retry of the same idempotency_key would re-execute the
+        # handler and write a SECOND receipt — auditors then see two
+        # receipts for one logical request. Caching first guarantees
+        # the retry hits the cache instead.
         self._store.save_message(self.name, msg.to_dict())
         for chunk in chunk_dicts:
             self._store.save_message(self.name, chunk)
         outcome = "completed" if chunk_dicts and chunk_dicts[-1].get("status") != "error" else "failed"
+
+        # Cache full chunk list for idempotent replay (#11).
+        if msg.idempotency_key and outcome == "completed":
+            self._cache_idempotent_response(msg, chunk_dicts)
+
         self._store.save_receipt(self.name, create_receipt(
             identity._private_key, identity.agent_id,
             task_ref=msg.id,
             refs=[msg.id] + [c["id"] for c in chunk_dicts],
             outcome=outcome,
         ))
-
-        # Cache full chunk list for idempotent replay (#11).
-        if msg.idempotency_key and outcome == "completed":
-            self._cache_idempotent_response(msg, chunk_dicts)
 
     def _cache_idempotent_response(self, msg: PACTMessage, response) -> None:
         """Cache a one-shot dict OR a streaming chunk list under the
@@ -504,11 +512,18 @@ class PACTAgent:
         return res.to_dict()
 
     def _resolve_sender_key(self, agent_id: str) -> bytes | None:
-        """Look up a sender's public key from peers cache."""
+        """Look up a sender's public key from peers cache.
+
+        Returns None on a malformed cache entry (corrupt base64) instead
+        of raising — caller treats it as "no key" and may trigger TOFU.
+        """
         peer = self._store.load_peer(agent_id)
-        if peer and "public_key" in peer:
+        if not peer or "public_key" not in peer:
+            return None
+        try:
             return base64.b64decode(peer["public_key"])
-        return None
+        except (binascii.Error, ValueError, TypeError):
+            return None
 
     def _build_known_keys_for_chain(self, identity: Identity, cap_dict: dict) -> dict:
         """Collect pubkeys needed to verify a delegation chain (issue #10).
@@ -575,7 +590,10 @@ class PACTAgent:
         old_next = old_doc.get("next_key_digest")
         if not old_next:
             return None
-        new_pub = base64.b64decode(new_pub_b64)
+        try:
+            new_pub = base64.b64decode(new_pub_b64)
+        except (binascii.Error, ValueError, TypeError):
+            return None
         if crypto.sha256_digest(new_pub) != old_next:
             return None
 
@@ -609,9 +627,16 @@ class PACTAgent:
             return None
         if identity_doc.get("agent_id") != claimed_agent_id:
             return None
+        # Decode pubkey defensively. If it's malformed base64, we reject
+        # the TOFU registration without caching anything — treating it
+        # the same as a failed agent_id derivation check.
+        try:
+            pub_bytes = base64.b64decode(pub_b64)
+        except (binascii.Error, ValueError, TypeError):
+            return None
         # Bind: cache the doc and return the pubkey
         self._store.save_peer(claimed_agent_id, identity_doc)
-        return base64.b64decode(pub_b64)
+        return pub_bytes
 
     def ask(
         self,

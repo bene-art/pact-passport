@@ -577,4 +577,53 @@ delegation chains (where agent A trusts caps issued by agent B because
 A trusts B's identity) require a `trusted_issuers` set per agent —
 deferred to post-v0.6.
 
+### 12.10 v0.5.3 additions (input validation, fail-closed)
+
+**Signature/key field tolerance.** Signature verification (`verify_message`,
+`verify_holder_proof`, `verify_receipt`, `verify_capability`) MUST treat
+malformed base64 in the relevant field as a verification failure rather
+than propagating the underlying decoder exception. Pre-v0.5.3 a single
+malformed signature in any incoming message could crash the dispatcher.
+The fail-closed contract is: malformed input → return False / return a
+structured failure result; never raise.
+
+**Identity-doc fault tolerance.** TOFU registration of an inline
+`identity_doc` MUST reject documents whose `public_key` field is not
+parseable base64. Same applies to the rotation-refresh path. Implementations
+return a clean rejection (None / fault) instead of raising.
+
+**Caveat value validation at issue/attenuate.** Caveats whose values
+are structurally invalid MUST be rejected at the time the cap is
+issued or attenuated, not at verification time. Required validations:
+- `max_invocations`: MUST be a positive integer (>= 1). Negative
+  values silently produce a cap that's dead-on-arrival under the
+  enforcement check `count >= max`.
+- `expires`: MUST be a parseable ISO 8601 timestamp. Unparseable
+  values would otherwise crash the verifier on the comparison step.
+
+Implementations raise (e.g. `ValueError`) at issue/attenuate time so
+the bug surfaces at the source rather than at verification time on
+some other agent.
+
+**HTTP body length sanitization.** HTTP transports MUST validate
+`Content-Length`:
+- Non-integer values → 400 Bad Request
+- Values <= 0 → 400 Bad Request
+- Values > `max_body_bytes` → 413 Content Too Large
+
+Pre-v0.5.3 the sync server's `int(self.headers.get("Content-Length", 0))`
+accepted negative values, falling through to `rfile.read(-1)`, which
+blocks indefinitely waiting for EOF — a slow-loris-shaped DoS using a
+single byte of header. v0.5.3 closes this; the async server (which
+reads via the ASGI protocol) was already immune.
+
+**Streaming write order.** During RES_CHUNK streaming completion, the
+idempotency cache MUST be persisted before the receipt is written.
+Pre-v0.5.3 wrote receipt first, cache second. A crash between those
+two writes would result in a retry of the same `idempotency_key`
+re-executing the handler and writing a SECOND receipt — creating
+duplicate audit entries for one logical request. The corrected order
+ensures that on retry, the cache hit returns the cached chunks
+without re-execution and without a second receipt.
+
 An implementation that produces identical outputs for these inputs is interoperable.

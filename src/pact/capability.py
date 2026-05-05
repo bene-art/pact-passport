@@ -8,6 +8,7 @@ Caveats can only be appended (attenuation) — never removed or widened.
 from __future__ import annotations
 
 import base64
+import binascii
 import uuid
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
@@ -111,6 +112,31 @@ class CapabilityToken:
         return any(c.restrict == "no_further_delegation" and c.terminal for c in self.caveats)
 
 
+def _validate_caveats(caveats: list[Caveat]) -> None:
+    """Sanity-check caveat values at issue/attenuate time.
+
+    Catches the foot-guns that produce silently-broken caps:
+    - max_invocations must be a positive int (negative or zero values
+      issue a cap that's effectively dead-on-arrival because the
+      enforcement check `count >= max` is true on first use)
+    - expires must be a parseable ISO 8601 timestamp (so the verifier
+      doesn't crash on the comparison later)
+    """
+    for c in caveats:
+        if c.restrict == "max_invocations":
+            if not isinstance(c.value, int) or isinstance(c.value, bool) or c.value < 1:
+                raise ValueError(
+                    f"max_invocations must be a positive int (>= 1), got {c.value!r}"
+                )
+        elif c.restrict == "expires":
+            try:
+                datetime.fromisoformat(c.value)
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"expires caveat must be a parseable ISO 8601 timestamp, got {c.value!r}: {e}"
+                )
+
+
 def issue_capability(
     issuer_private_key: bytes,
     issuer_id: str,
@@ -118,7 +144,12 @@ def issue_capability(
     action: str,
     caveats: list[Caveat] | None = None,
 ) -> CapabilityToken:
-    """Issue a new root capability token from issuer to holder."""
+    """Issue a new root capability token from issuer to holder.
+
+    Raises ValueError if any caveat value is malformed (negative
+    max_invocations, unparseable ISO timestamp, etc.).
+    """
+    _validate_caveats(caveats or [])
     token = CapabilityToken(
         cap_id=str(uuid.uuid4()),
         issuer=issuer_id,
@@ -148,8 +179,11 @@ def attenuate(
     - For time caveats (expires), new value must be <= parent value.
     - The action must remain the same.
 
-    Raises AttenuationViolation on any rule violation.
+    Raises AttenuationViolation on any rule violation. Raises ValueError
+    on a malformed caveat value (negative max_invocations, unparseable
+    expires timestamp).
     """
+    _validate_caveats(additional_caveats)
     # Check terminal
     if parent.is_terminal():
         raise AttenuationViolation("Parent capability has no_further_delegation caveat")
@@ -226,12 +260,31 @@ def verify_capability(
     Checks: signature, holder match, caveats (expiry), revocation,
     and delegation chain (if present).
 
+    Returns a CapabilityResult; never raises on malformed input.
+    Malformed signatures, malformed base64, or malformed ISO timestamps
+    are reported as verification failures, not propagated as exceptions.
+
     Args:
         token: The capability token to verify.
         expected_holder: The agent_id that should be the holder.
         issuer_public_key: Public key of the root issuer.
         known_keys: Optional dict of agent_id → public_key for chain verification.
     """
+    try:
+        return _verify_capability_inner(token, expected_holder, issuer_public_key, known_keys)
+    except (binascii.Error, ValueError) as e:
+        # Malformed base64 in token.signature, link.sig, or malformed
+        # ISO timestamp in expires caveat. Pre-v0.5.3 these crashed the
+        # verifier. Now they fail-closed as a structured result.
+        return CapabilityResult(False, f"Malformed token field: {e}")
+
+
+def _verify_capability_inner(
+    token: CapabilityToken,
+    expected_holder: str,
+    issuer_public_key: bytes,
+    known_keys: dict[str, bytes] | None,
+) -> CapabilityResult:
     # Check revoked
     if token.revoked:
         return CapabilityResult(False, "Capability has been revoked")

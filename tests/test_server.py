@@ -60,7 +60,21 @@ def test_message_dispatch():
 
 
 def test_oversize_request_rejected():
-    """Issue #9: Content-Length above max_body_bytes returns HTTP 413."""
+    """Issue #9: Content-Length above max_body_bytes returns HTTP 413.
+
+    Three valid outcomes — the test accepts any of them as "server
+    rejected the oversize body":
+      1. urllib reads a clean HTTPError with code 413 (typical)
+      2. The server closes the TCP connection before the 413 lands,
+         surfacing as ConnectionResetError (observed on macOS CI; the
+         server sent the response, but client didn't read it before
+         the close — race in BaseHTTPServer's connection handling)
+      3. URLError wrapping a ConnectionResetError (same as #2 but
+         caught at a different layer)
+    All three indicate the server rejected the body. Earlier versions
+    of this test caught only #1 and produced spurious failures on
+    macOS roughly 1-in-3 PR runs.
+    """
     server = PACTServer(port=0, dispatch=lambda b: {"ok": True}, max_body_bytes=1024)
     port = server.start()
     try:
@@ -69,13 +83,19 @@ def test_oversize_request_rejected():
         req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req) as resp:
-                # If urllib didn't raise, the status should be the 413 we returned
                 assert resp.status == 413
         except urllib.error.HTTPError as e:
             assert e.code == 413
             body_resp = json.loads(e.read())
             assert "request too large" in body_resp.get("error", "").lower()
             assert body_resp.get("max_bytes") == 1024
+        except (ConnectionResetError, urllib.error.URLError) as e:
+            # Server sent 413 but closed the connection before the
+            # client could read the body. Still a rejection, just one
+            # the kernel got to before urllib did.
+            cause = getattr(e, "reason", e)
+            assert isinstance(cause, ConnectionResetError) or isinstance(e, ConnectionResetError), \
+                f"Expected ConnectionResetError-shaped failure, got: {e!r}"
     finally:
         server.stop()
 
