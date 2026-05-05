@@ -550,7 +550,7 @@ It is:
 
 ---
 
-## v0.5 Update Note (added 2026-05-03)
+## v0.5 Update Note (added 2026-05-03, extended 2026-05-04 for v0.5.2)
 
 The body of this document was written before v0.2-v0.5. The protocol has
 since gained:
@@ -561,6 +561,14 @@ since gained:
 - Fail-closed verification rules and rotation-continuity refresh
 - New standard fault codes: `unknown_peer`, `holder_proof_required`,
   `cap_unknown`, `handler_error`
+- **v0.5.2:** signed `outcome=failed` receipts on every dispatch error
+  (closes the audit gap on failure paths), `HandlerFailure` exception
+  for explicit handler-failure signaling with custom fault codes,
+  `cap_envelope` now requires `cap_id` (auto-derived at message build
+  if omitted, raises `ValueError` on malformed envelopes), server-side
+  `max_deadline_seconds` ceiling (default 3600s) with new fault code
+  `deadline_too_far`, and a documented single-issuer trust model
+  (`issuer must be self` — cross-org caps deferred to v0.6+).
 
 The formal contract for these additions lives in
 [`spec/PACT_v1.md` §12](../spec/PACT_v1.md). The implementation tracks

@@ -523,4 +523,58 @@ invocation counts SHOULD persist across agent restarts. The
 spec-level contract (idempotent dedup, max_invocations enforcement)
 is process-independent; how it's stored is implementation-defined.
 
+### 12.9 v0.5.2 additions (audit, caps, deadlines, trust model)
+
+**Signed `outcome=failed` receipts on dispatch errors.** Receivers MUST
+write a signed receipt with `outcome: "failed"` whenever a REQ is
+rejected at any pipeline step (deadline_exceeded, invalid_signature,
+holder_proof_required, cap_unknown, capability_invalid, no_handler,
+handler_error, deadline_too_far). The receipt's `refs` MUST include
+both the inbound REQ id and the signed error RES id. Pre-v0.5.2
+implementations did not write receipts on failure paths, breaking the
+bilateral-receipt promise on rejection.
+
+**Receipt outcomes are exhaustive:**
+- `completed` — handler returned a payload and a signed RES was sent
+- `failed` — dispatch was rejected at any pipeline step OR handler
+  raised `HandlerFailure(code, detail)` for explicit failure signaling
+- `cancelled` — streaming consumer disconnected mid-stream
+
+**HandlerFailure exception (reference impl).** Apps that wrap remote
+calls (e.g. peer delegation) SHOULD raise `HandlerFailure(code, detail)`
+rather than returning an error dict, so the failure produces a signed
+error response with the custom code and an `outcome=failed` receipt.
+Returned dicts continue to mean success; only raised exceptions
+(unhandled or `HandlerFailure`) produce error responses.
+
+**`cap_envelope` requires `cap_id` (§6.2 / §12.7 update).** A REQ
+including `cap_envelope` MUST also include `cap_id`. The reference
+impl auto-derives `cap_id` from `cap_envelope.cap_id` at build time,
+or raises `ValueError` if the envelope is malformed. Pre-v0.5.2 builds
+allowed `cap_envelope` without `cap_id`, in which case the receiver's
+cap-verification step was silently skipped. Receivers MUST treat
+`cap_envelope` without `cap_id` as a malformed message.
+
+**Deadline upper bound.** Receivers MUST enforce a configurable
+`max_deadline_seconds` ceiling (reference default: 3600s). REQs whose
+deadline lies further in the future than the ceiling MUST be rejected
+with new fault code `deadline_too_far`. This prevents a malicious peer
+from pinning the dispatch lock with a year-2099 deadline plus a hung
+handler.
+
+**New standard fault code:**
+
+| Code | When |
+|---|---|
+| `deadline_too_far` | REQ deadline exceeds receiver's `max_deadline_seconds` ceiling |
+
+**Single-issuer trust model (clarification, not change).** PACT v0.5
+verifiers reject capabilities whose `issuer` does not equal the
+verifier's own `agent_id` (fault code `capability_invalid`,
+detail `cap issuer ... is not this agent`). This is intentional:
+agents only honor caps they issued themselves. Cross-organization
+delegation chains (where agent A trusts caps issued by agent B because
+A trusts B's identity) require a `trusted_issuers` set per agent —
+deferred to post-v0.6.
+
 An implementation that produces identical outputs for these inputs is interoperable.
