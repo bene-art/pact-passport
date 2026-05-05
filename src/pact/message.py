@@ -143,6 +143,22 @@ def build_req(
     msg_id = str(uuid.uuid4())
     deadline = (datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)).isoformat()
 
+    # If a cap_envelope was supplied without an explicit cap_id, derive
+    # cap_id from the envelope. Without this, the receiver's cap
+    # verification step is silently skipped (see _step_verify_capability)
+    # — the envelope is just along for the ride. Sending a cap and
+    # expecting it to be enforced should not require the caller to
+    # remember to also set cap_id.
+    if cap_envelope is not None and cap_id is None:
+        env_cap_id = cap_envelope.get("cap_id")
+        if not env_cap_id:
+            raise ValueError(
+                "cap_envelope is missing 'cap_id'. Either pass an explicit "
+                "cap_id or include a valid cap_envelope dict (with cap_id) "
+                "as produced by CapabilityToken.to_dict()."
+            )
+        cap_id = env_cap_id
+
     msg = PACTMessage(
         id=msg_id,
         type="REQ",

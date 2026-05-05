@@ -236,6 +236,10 @@ A capability is **a signed, attenuable, holder-bound proof of authority**. Posse
 - **Attenuation only** — caveats can only be appended. The effective permission is the AND of all caveats. You can only narrow, never widen.
 - **Resource-accountable** — `max_invocations` is a first-class caveat type, preventing unlimited request flooding.
 
+**Trust model (v0.5 — issuer-must-be-self):** PACT v0.5 enforces a *single-issuer* trust model — an agent only honors capabilities it issued itself. Caps presented to a verifier whose `issuer` field is *not* the verifier's own `agent_id` are rejected with `capability_invalid: cap issuer is not this agent`. This is intentional for v0.5: it keeps the trust graph small and unambiguous (no transitive-trust attacks). Cross-organization delegation chains, where agent A trusts caps issued by agent B because A trusts B's identity, require a `trusted_issuers` set per agent — planned for post-v0.6. If you need cross-org caps today, you can either (a) have the verifier issue the cap to the cross-org holder directly, or (b) wait for v0.6.
+
+**Capability validation requires `cap_id` (v0.5.2+):** A REQ that includes a `cap_envelope` but no `cap_id` is rejected at message-build time. Earlier versions silently transported the envelope without verifying it; v0.5.2 closes this by auto-deriving `cap_id` from `cap_envelope.cap_id` (or raising `ValueError` if the envelope lacks one). Apps that expect cap enforcement should always set `cap_id` and `cap_envelope` together.
+
 ---
 
 ### 3. Message
@@ -368,6 +372,15 @@ Each agent signs its own view. No cooperation required.
 If both parties publish receipts, a third party can compare them. Discrepancies are evidence. If one party refuses, the other party's signed receipt still stands as a unilateral claim.
 
 Agents MAY exchange receipts and co-sign for stronger guarantees. But the protocol does not require it.
+
+**Outcomes (v0.5.2+):** Receipts are written for both successful and failed dispatches. The `outcome` field is one of:
+- `completed` — handler returned a payload and a signed RES was sent
+- `failed` — dispatch was rejected at any pipeline step (deadline_exceeded, invalid_signature, capability_invalid, no_handler, handler_error, deadline_too_far) OR the handler raised `HandlerFailure` to signal explicit failure
+- `cancelled` — streaming consumer disconnected mid-stream
+
+Pre-v0.5.2 versions did not write receipts on the failure paths. Apps relying on pre-v0.5.2 receipts to prove "we attempted this work" will not see entries for failed attempts; v0.5.2+ closes this gap.
+
+**Signaling failure from a handler:** Apps that wrap remote calls (e.g. peer delegation) should `raise HandlerFailure(code, detail)` rather than returning an error dict. A returned dict is treated as a successful response payload; only raised exceptions produce an `outcome=failed` receipt.
 
 ---
 

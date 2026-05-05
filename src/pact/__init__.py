@@ -7,6 +7,7 @@ capability tokens (Macaroons-style attenuable), three message types
 
 from pact._version import __version__
 from pact.agent import PACTAgent
+from pact.errors import HandlerFailure
 from pact.capability import (
     CapabilityToken,
     Caveat,
@@ -35,6 +36,7 @@ __all__ = [
     "__version__",
     # Core agent
     "PACTAgent",
+    "HandlerFailure",
     "Identity",
     # Capabilities
     "CapabilityToken",
