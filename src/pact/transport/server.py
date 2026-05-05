@@ -84,8 +84,16 @@ class PACTHandler(BaseHTTPRequestHandler):
             self._send_response({"error": "not found"}, 404)
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
-        if content_length == 0:
+        # Parse Content-Length defensively. A non-integer or missing value
+        # falls through to 0 → empty-body 400. Negative values would
+        # otherwise call rfile.read(-1), which blocks indefinitely waiting
+        # for EOF — a slow-loris-shaped DoS via a single byte of header.
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            self._send_response({"error": "invalid Content-Length"}, 400)
+            return
+        if content_length <= 0:
             self._send_response({"error": "empty body"}, 400)
             return
 

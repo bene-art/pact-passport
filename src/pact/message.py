@@ -6,6 +6,7 @@ Only two message types. Everything else is a payload within REQ/RES.
 from __future__ import annotations
 
 import base64
+import binascii
 import uuid
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
@@ -250,16 +251,31 @@ def build_res_chunk(
 
 
 def verify_message(msg: PACTMessage, sender_public_key: bytes) -> bool:
-    """Verify a message's signature."""
-    sig_bytes = base64.b64decode(msg.signature)
+    """Verify a message's signature.
+
+    Returns False on malformed base64 in the signature field rather than
+    propagating binascii.Error. Pre-v0.5.3 a malformed signature crashed
+    the dispatcher; now it fails-closed as a normal verification failure.
+    """
+    try:
+        sig_bytes = base64.b64decode(msg.signature)
+    except (binascii.Error, ValueError, TypeError):
+        return False
     return crypto.verify(canonical_json(msg.signable_dict()), sig_bytes, sender_public_key)
 
 
 def verify_holder_proof(msg: PACTMessage, holder_public_key: bytes) -> bool:
-    """Verify the holder_proof in a REQ message."""
+    """Verify the holder_proof in a REQ message.
+
+    Returns False on malformed base64 (same fail-closed treatment as
+    verify_message — see v0.5.3 honesty patch).
+    """
     if not msg.holder_proof:
         return False
-    proof_bytes = base64.b64decode(msg.holder_proof)
+    try:
+        proof_bytes = base64.b64decode(msg.holder_proof)
+    except (binascii.Error, ValueError, TypeError):
+        return False
     return crypto.verify(msg.id.encode(), proof_bytes, holder_public_key)
 
 
