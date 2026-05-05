@@ -23,6 +23,7 @@ from pact.message import (
     PACTMessage, build_req, build_res, build_res_chunk, verify_message,
     verify_holder_proof, is_deadline_exceeded,
 )
+from pact.errors import HandlerFailure
 from pact.receipt import create_receipt
 from pact.store import PACTStore
 from pact.transport.server import PACTServer
@@ -66,12 +67,20 @@ class PACTAgent:
         port: int = 0,
         auto_grant: bool = True,  # deprecated v0.5.1 — has no effect
         idempotency_cache_max: int = 10_000,
+        max_deadline_seconds: int = 3600,
     ):
         self.name = name
         self.capabilities = capabilities or []
         self.host = host
         self.port = port
         self.auto_grant = auto_grant
+        # Upper bound on REQ deadlines, server-side. A request whose
+        # deadline lies further than this in the future is rejected at
+        # message validation. Without this, an unbounded deadline +
+        # a hung handler can hold the per-agent task lock indefinitely.
+        # 3600s (1h) is a reasonable default for synchronous workloads;
+        # bump it for very-long-running streaming intents.
+        self.max_deadline_seconds = max_deadline_seconds
         self._handlers: dict[str, Callable] = {}
         self._store = PACTStore(store_dir)
         self._identity: Identity | None = None
@@ -202,6 +211,21 @@ class PACTAgent:
     def _step_check_deadline(self, ctx: "_DispatchCtx") -> dict | None:
         if is_deadline_exceeded(ctx.msg):
             return self._dispatch_err(ctx, "deadline_exceeded", "Request deadline has passed")
+        # Reject deadlines further in the future than max_deadline_seconds.
+        # Prevents a malicious or buggy peer from pinning the task lock
+        # with a year-2099 deadline.
+        if ctx.msg.deadline:
+            try:
+                deadline_dt = datetime.fromisoformat(ctx.msg.deadline)
+                horizon_s = (deadline_dt - datetime.now(timezone.utc)).total_seconds()
+                if horizon_s > self.max_deadline_seconds:
+                    return self._dispatch_err(
+                        ctx, "deadline_too_far",
+                        f"Deadline {int(horizon_s)}s exceeds max {self.max_deadline_seconds}s",
+                    )
+            except (ValueError, TypeError):
+                # Malformed deadline — let other validation steps handle.
+                pass
         return None
 
     def _step_idempotency_lookup(self, ctx: "_DispatchCtx") -> dict | Iterator[dict] | None:
@@ -337,6 +361,10 @@ class PACTAgent:
         handler = self._handlers[ctx.action]
         try:
             result = handler(msg.payload)
+        except HandlerFailure as e:
+            # Handler explicitly signalled failure with a custom fault.
+            # Use the handler's fault code, not a generic handler_error.
+            return self._dispatch_err(ctx, e.code, e.detail or str(e))
         except Exception as e:
             return self._dispatch_err(ctx, "handler_error", str(e))
 
@@ -451,12 +479,28 @@ class PACTAgent:
         self._persist_idempotency()
 
     def _dispatch_err(self, ctx: "_DispatchCtx", code: str, detail: str) -> dict:
-        """Build a signed error response for any dispatch step."""
+        """Build a signed error response for any dispatch step.
+
+        Also writes a signed `outcome=failed` receipt so the failure is
+        part of the audit trail. Without this, timeouts and rejections
+        leave no record on the receiver side, breaking the bilateral-
+        receipt promise on failure paths.
+        """
         res = build_res(
             ctx.identity._private_key, ctx.identity.agent_id, ctx.msg,
             status="error",
             fault={"code": code, "detail": detail},
         )
+        # Persist the inbound REQ + signed error RES + a failed receipt.
+        # save_message is idempotent on id, so writing both here is safe
+        # even when an earlier dispatch step already wrote the inbound msg.
+        self._store.save_message(self.name, ctx.msg.to_dict())
+        self._store.save_message(self.name, res.to_dict())
+        self._store.save_receipt(self.name, create_receipt(
+            ctx.identity._private_key, ctx.identity.agent_id,
+            task_ref=ctx.msg.id, refs=[ctx.msg.id, res.id],
+            outcome="failed",
+        ))
         return res.to_dict()
 
     def _resolve_sender_key(self, agent_id: str) -> bytes | None:
