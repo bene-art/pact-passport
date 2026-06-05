@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from dataclasses import dataclass, field
 
 from pact import crypto
@@ -134,7 +134,7 @@ def _validate_caveats(caveats: list[Caveat]) -> None:
             except (TypeError, ValueError) as e:
                 raise ValueError(
                     f"expires caveat must be a parseable ISO 8601 timestamp, got {c.value!r}: {e}"
-                )
+                ) from e
 
 
 def issue_capability(
@@ -335,7 +335,7 @@ def _verify_capability_inner(
                 return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
 
     # Check caveats
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for caveat in token.caveats:
         if caveat.restrict == "expires":
             expires = datetime.fromisoformat(caveat.value)

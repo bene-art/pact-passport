@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 import binascii
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, UTC
 from dataclasses import dataclass, field
 
 from pact import crypto
@@ -142,7 +142,7 @@ def build_req(
     a normal one-shot RES.
     """
     msg_id = str(uuid.uuid4())
-    deadline = (datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)).isoformat()
+    deadline = (datetime.now(UTC) + timedelta(seconds=deadline_seconds)).isoformat()
 
     # If a cap_envelope was supplied without an explicit cap_id, derive
     # cap_id from the envelope. Without this, the receiver's cap
@@ -284,4 +284,4 @@ def is_deadline_exceeded(msg: PACTMessage) -> bool:
     if not msg.deadline:
         return False
     deadline = datetime.fromisoformat(msg.deadline)
-    return datetime.now(timezone.utc) > deadline
+    return datetime.now(UTC) > deadline

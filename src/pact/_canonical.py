@@ -37,7 +37,7 @@ def canonical_cbor(obj: dict) -> bytes:
     except ImportError:
         raise ImportError(
             "CBOR support requires cbor2. Install with: pip install pact-passport[cbor]"
-        )
+        ) from None
     return cbor2.dumps(obj, canonical=True)
 
 
@@ -51,7 +51,7 @@ def decode_cbor(data: bytes) -> dict:
     except ImportError:
         raise ImportError(
             "CBOR support requires cbor2. Install with: pip install pact-passport[cbor]"
-        )
+        ) from None
     return cbor2.loads(data)
 
 

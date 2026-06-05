@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-from pathlib import Path
 
 from pact import crypto
 from pact._canonical import canonical_json
@@ -133,7 +132,7 @@ class Identity:
         Returns the rotation event dict.
         """
         # The pre-committed next key becomes current
-        old_pub_b64 = self.public_key_b64()
+        self.public_key_b64()
         new_priv = self._next_private_key
         from nacl.signing import SigningKey as _SK
         new_pub = bytes(_SK(new_priv).verify_key)

@@ -8,12 +8,12 @@ from __future__ import annotations
 import json
 import urllib.request
 import urllib.error
-from typing import Iterator
+from collections.abc import Iterator
 
 from pact.message import PACTMessage
 from pact._canonical import (
     encode_message, decode_message,
-    JSON_CONTENT_TYPE, CBOR_CONTENT_TYPE,
+    JSON_CONTENT_TYPE,
 )
 
 
@@ -72,7 +72,7 @@ def send_message_streaming(
     target_base_url: str,
     msg: PACTMessage,
     timeout: float = 120.0,
-) -> "Iterator[dict]":
+) -> Iterator[dict]:
     """Send a streaming REQ and yield each RES_CHUNK dict as it arrives.
 
     The REQ should have stream=True. The server responds with

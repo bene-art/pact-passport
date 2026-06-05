@@ -32,30 +32,30 @@ from pact.transport.client import (
 )
 
 __all__ = [
-    # Version
-    "__version__",
-    # Core agent
-    "PACTAgent",
-    "HandlerFailure",
-    "Identity",
     # Capabilities
     "CapabilityToken",
     "Caveat",
-    "attenuate",
-    "issue_capability",
-    "verify_capability",
+    "HandlerFailure",
+    "Identity",
+    # Core agent
+    "PACTAgent",
     # Messages
     "PACTMessage",
+    # Version
+    "__version__",
+    "attenuate",
     "build_req",
     "build_res",
     "build_res_chunk",
-    "verify_message",
-    "verify_holder_proof",
     # Receipts
     "create_receipt",
-    "verify_receipt",
+    "fetch_identity",
+    "issue_capability",
     # Transport client
     "send_message",
     "send_message_streaming",
-    "fetch_identity",
+    "verify_capability",
+    "verify_holder_proof",
+    "verify_message",
+    "verify_receipt",
 ]

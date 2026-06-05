@@ -22,7 +22,7 @@ Requires: pip install pact-passport[lak]
   rate limit) is **bypassed** for task intents. Callers are presumed
   trusted by the surrounding LAN setup. Do not expose a LAK-bridged
   agent to untrusted networks until validation is layered in.
-- Bridged dispatch uses a sync polling wait (100ms × 300 iterations)
+- Bridged dispatch uses a sync polling wait (100ms x 300 iterations)
   for the LAK response. This blocks an HTTP handler thread per
   outstanding LAK call. Use the async server (`AsyncPACTServer`) if
   you need higher concurrency.
@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from pact.agent import PACTAgent
 from pact.message import PACTMessage, build_res

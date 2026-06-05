@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
-import socket
 import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from typing import Callable
+from collections.abc import Callable
 
 from pact._canonical import (
     encode_message, decode_message,
@@ -113,7 +112,7 @@ class PACTHandler(BaseHTTPRequestHandler):
         incoming_ct = self.headers.get("Content-Type", JSON_CONTENT_TYPE)
         try:
             raw = self.rfile.read(content_length)
-        except (socket.timeout, TimeoutError):
+        except TimeoutError:
             # Slow-loris: client declared content_length but never sent
             # the bytes. read_timeout fires; we give up cleanly instead
             # of holding the thread open.

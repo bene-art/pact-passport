@@ -10,17 +10,18 @@ import signal
 import sys
 import threading
 import warnings
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
-from typing import Callable, Any, Iterator
+from typing import Any
+from collections.abc import Callable, Iterator
 
 from zeroconf import Zeroconf
 
 from pact import crypto
 from pact._chaos import chaos_sleep
 from pact.identity import Identity
-from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability, attenuate
+from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability
 from pact.message import (
     PACTMessage, build_req, build_res, build_res_chunk, verify_message,
     verify_holder_proof, is_deadline_exceeded,
@@ -135,7 +136,7 @@ class PACTAgent:
         if self._state_loaded:
             return
         raw = self._store.load_idempotency_cache(self.name)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cache: dict[str, tuple[dict, datetime]] = {}
         for k, v in raw.items():
             try:
@@ -224,7 +225,7 @@ class PACTAgent:
 
     # --- Dispatch pipeline steps ---
 
-    def _step_check_deadline(self, ctx: "_DispatchCtx") -> dict | None:
+    def _step_check_deadline(self, ctx: _DispatchCtx) -> dict | None:
         if is_deadline_exceeded(ctx.msg):
             return self._dispatch_err(ctx, "deadline_exceeded", "Request deadline has passed")
         # Reject deadlines further in the future than max_deadline_seconds.
@@ -233,7 +234,7 @@ class PACTAgent:
         if ctx.msg.deadline:
             try:
                 deadline_dt = datetime.fromisoformat(ctx.msg.deadline)
-                horizon_s = (deadline_dt - datetime.now(timezone.utc)).total_seconds()
+                horizon_s = (deadline_dt - datetime.now(UTC)).total_seconds()
                 if horizon_s > self.max_deadline_seconds:
                     return self._dispatch_err(
                         ctx, "deadline_too_far",
@@ -244,14 +245,14 @@ class PACTAgent:
                 pass
         return None
 
-    def _step_idempotency_lookup(self, ctx: "_DispatchCtx") -> dict | Iterator[dict] | None:
+    def _step_idempotency_lookup(self, ctx: _DispatchCtx) -> dict | Iterator[dict] | None:
         # Chaos hook: widens the cache-check + handler-execute window
         # under PACT_CHAOS=1. No effect in normal runs.
         chaos_sleep()
         msg = ctx.msg
         if msg.idempotency_key and msg.idempotency_key in self._idempotency_cache:
             cached_res, expires_at = self._idempotency_cache[msg.idempotency_key]
-            if datetime.now(timezone.utc) < expires_at:
+            if datetime.now(UTC) < expires_at:
                 # Streaming replay: cached value is a list of chunk dicts.
                 # Yield them back as a fresh iterator so the HTTP layer
                 # streams them just like a fresh response (#11).
@@ -261,7 +262,7 @@ class PACTAgent:
             del self._idempotency_cache[msg.idempotency_key]
         return None
 
-    def _step_verify_sender(self, ctx: "_DispatchCtx") -> dict | None:
+    def _step_verify_sender(self, ctx: _DispatchCtx) -> dict | None:
         msg = ctx.msg
         sender_pub = self._resolve_sender_key(msg.from_agent)
         # Trust-on-first-use: an unknown peer providing an inline
@@ -290,7 +291,7 @@ class PACTAgent:
         ctx.sender_pub = sender_pub
         return None
 
-    def _step_verify_capability(self, ctx: "_DispatchCtx") -> dict | None:
+    def _step_verify_capability(self, ctx: _DispatchCtx) -> dict | None:
         msg = ctx.msg
         if not msg.cap_id:
             return None  # falls through to payload-action lookup
@@ -362,7 +363,7 @@ class PACTAgent:
         ctx.cap_token = token
         return None
 
-    def _step_resolve_action(self, ctx: "_DispatchCtx") -> dict | None:
+    def _step_resolve_action(self, ctx: _DispatchCtx) -> dict | None:
         if ctx.cap_token:
             ctx.action = ctx.cap_token.action
         else:
@@ -372,7 +373,7 @@ class PACTAgent:
                                       f"No handler for action: {ctx.action}")
         return None
 
-    def _step_run_handler(self, ctx: "_DispatchCtx") -> dict | Iterator[dict]:
+    def _step_run_handler(self, ctx: _DispatchCtx) -> dict | Iterator[dict]:
         msg, identity = ctx.msg, ctx.identity
         handler = self._handlers[ctx.action]
         try:
@@ -407,7 +408,7 @@ class PACTAgent:
         self._cache_idempotent_response(msg, result_dict)
         return result_dict
 
-    def _run_streaming_handler(self, ctx: "_DispatchCtx", source) -> Iterator[dict]:
+    def _run_streaming_handler(self, ctx: _DispatchCtx, source) -> Iterator[dict]:
         """Wrap a generator handler: sign each yielded payload as a
         RES_CHUNK and collect for caching. Issue #11.
 
@@ -490,18 +491,18 @@ class PACTAgent:
         if msg.deadline:
             try:
                 deadline_dt = datetime.fromisoformat(msg.deadline)
-                ttl = max(deadline_dt - datetime.now(timezone.utc),
+                ttl = max(deadline_dt - datetime.now(UTC),
                           timedelta(seconds=10))
             except ValueError:
                 pass
         self._idempotency_cache[msg.idempotency_key] = (
-            response, datetime.now(timezone.utc) + ttl,
+            response, datetime.now(UTC) + ttl,
         )
         self._evict_expired_cache()
         self._enforce_lru_cap()
         self._persist_idempotency()
 
-    def _dispatch_err(self, ctx: "_DispatchCtx", code: str, detail: str) -> dict:
+    def _dispatch_err(self, ctx: _DispatchCtx, code: str, detail: str) -> dict:
         """Build a signed error response for any dispatch step.
 
         Also writes a signed `outcome=failed` receipt so the failure is
@@ -732,7 +733,7 @@ class PACTAgent:
 
     def _evict_expired_cache(self) -> None:
         """Remove expired entries from the idempotency cache."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired = [k for k, (_, exp) in self._idempotency_cache.items() if now >= exp]
         for k in expired:
             del self._idempotency_cache[k]
@@ -826,8 +827,8 @@ class PACTAgent:
         ip = self._mdns_info.parsed_addresses()[0] if self._mdns_info.addresses else "0.0.0.0"
         print(f"Serving {self.name} on http://{ip}:{actual_port} (agent_id: {identity.agent_id})")
         print(f"Capabilities: {self.capabilities}")
-        print(f"Registered on local network via mDNS")
-        print(f"Press Ctrl-C to stop")
+        print("Registered on local network via mDNS")
+        print("Press Ctrl-C to stop")
 
         if blocking:
             try:

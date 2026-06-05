@@ -122,10 +122,7 @@ class PACTStore:
 
     def append_event(self, name: str, event: dict) -> None:
         path = self._agent_dir(name) / "event_log.json"
-        if path.exists():
-            events = json.loads(path.read_text())
-        else:
-            events = []
+        events = json.loads(path.read_text()) if path.exists() else []
         events.append(event)
         _write_atomic(path, json.dumps(events, indent=2))
 

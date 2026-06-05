@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from pact.store import PACTStore
 
@@ -27,7 +26,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         return
 
     identity = Identity.create(name, store)
-    print(f"Identity created.")
+    print("Identity created.")
     print(f"  Agent:    {name}")
     print(f"  Agent ID: {identity.agent_id}")
     print(f"  Keys:     {store._agent_dir(name)}")
@@ -50,7 +49,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
             sys.exit(1)
         else:
             print(f"Multiple agents found: {', '.join(agents)}")
-            print(f"Specify one with: pact serve --agent <name>")
+            print("Specify one with: pact serve --agent <name>")
             sys.exit(1)
 
     if not store.has_agent(name):
@@ -109,7 +108,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
             print("No local agents found. Run: pact init <name>")
             sys.exit(1)
         else:
-            print(f"Multiple agents found. Specify with: pact ask --agent <name> ...")
+            print("Multiple agents found. Specify with: pact ask --agent <name> ...")
             sys.exit(1)
 
     if not store.has_agent(name):
@@ -156,7 +155,7 @@ def cmd_receipts(args: argparse.Namespace) -> None:
             print("No agents found.")
             return
         else:
-            print(f"Multiple agents. Specify with: pact receipts --agent <name>")
+            print("Multiple agents. Specify with: pact receipts --agent <name>")
             return
 
     receipts = store.list_receipts(name)
@@ -186,7 +185,7 @@ def cmd_identity(args: argparse.Namespace) -> None:
             print("No agents found.")
             return
         else:
-            print(f"Multiple agents. Specify with: pact identity <name>")
+            print("Multiple agents. Specify with: pact identity <name>")
             return
 
     if not store.has_agent(name):
@@ -218,14 +217,14 @@ def cmd_grant(args: argparse.Namespace) -> None:
     agent = PACTAgent(name=name)
     token = agent.grant(args.holder, args.action, caveats=caveats or None)
 
-    print(f"Capability issued.")
+    print("Capability issued.")
     print(f"  cap_id:  {token.cap_id}")
     print(f"  action:  {token.action}")
     print(f"  holder:  {token.holder}")
     if caveats:
         for c in caveats:
             print(f"  caveat:  {c.restrict} = {c.value}")
-    print(f"\nShare the cap_id with the holder agent.")
+    print("\nShare the cap_id with the holder agent.")
 
 
 def cmd_revoke(args: argparse.Namespace) -> None:
@@ -314,13 +313,13 @@ def cmd_rotate(args: argparse.Namespace) -> None:
     try:
         event = identity.rotate()
         new_pub = identity.public_key_b64()[:20]
-        print(f"Key rotation complete.")
+        print("Key rotation complete.")
         print(f"  Agent:    {name}")
         print(f"  Agent ID: {identity.agent_id}  (unchanged)")
         print(f"  Old key:  {old_pub}...")
         print(f"  New key:  {new_pub}...")
         print(f"  Sequence: {event['sequence']}")
-        print(f"  Next key committed (pre-rotation)")
+        print("  Next key committed (pre-rotation)")
     except ValueError as e:
         print(f"Rotation failed: {e}")
         sys.exit(1)
@@ -411,7 +410,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print(f"\033[31m{len(issues)} issue(s) found.\033[0m")
         sys.exit(1)
     else:
-        print(f"\033[32mAll checks passed.\033[0m")
+        print("\033[32mAll checks passed.\033[0m")
 
 
 def _resolve_agent_name(store: PACTStore, name: str | None) -> str | None:

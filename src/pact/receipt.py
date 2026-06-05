@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 from pact import crypto
 from pact._canonical import canonical_json
@@ -38,7 +38,7 @@ def create_receipt(
         "task_ref": task_ref,
         "refs": refs,
         "outcome": outcome,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "alg": crypto.ALG,
     }
     sig = crypto.sign(canonical_json(receipt), private_key)

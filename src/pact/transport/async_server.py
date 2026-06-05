@@ -15,12 +15,13 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 from pact._canonical import (
     encode_message, decode_message,
     JSON_CONTENT_TYPE, CBOR_CONTENT_TYPE,
 )
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +118,8 @@ def _make_asgi_app(
             except Exception:
                 logger.exception("stream dispatch error")
                 # Best-effort terminate
-                try:
+                with contextlib.suppress(Exception):
                     await send({"type": "http.response.body", "body": b"", "more_body": False})
-                except Exception:
-                    pass
 
         # Route
         if method == "GET" and path == "/pact/v1/health":
@@ -200,7 +199,7 @@ class AsyncPACTServer:
         except ImportError:
             raise ImportError(
                 "Async server requires uvicorn. Install with: pip install pact-passport[fast]"
-            )
+            ) from None
 
         app = _make_asgi_app(
             self._dispatch, self._identity_doc, self._max_body_bytes,
