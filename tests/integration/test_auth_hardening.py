@@ -41,7 +41,6 @@ def test_unknown_peer_rejected_in_strict_mode(sandbox):
     inline identity_doc).
     """
     bob = sandbox["bob"]
-    bob["agent"].auto_grant = False  # strict mode
 
     @bob["agent"].handle("ping")
     def ping(payload):

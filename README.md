@@ -31,7 +31,7 @@ The reference implementation is ~3,750 LOC in `src/pact/`. The wire protocol is 
 | Property | Mechanism |
 |---|---|
 | Authenticity | Every message + receipt signed Ed25519 (PyNaCl). `verify_message` is fail-closed on malformed input. |
-| Identity | `agent_id = sha256(alg \|\| pubkey)`. Self-certifying; no CA. |
+| Identity | `agent_id = sha256(alg \|\| base64(pubkey))`. Self-certifying; no CA. |
 | Key rotation | KERI-style pre-rotation via `next_key_digest`. First post-rotation message proves continuity. |
 | Authorization | Holder-bound capability tokens with append-only caveat chain. Stolen tokens require the holder's private key to present (`holder_proof`). |
 | Replay safety | Mandatory `idempotency_key` per REQ. Durable cache survives process restart. |
@@ -166,6 +166,7 @@ contrib/
 | v0.5.1 | Polish: docs, exports, async-server parity, CI matrix | Done |
 | v0.5.2 | Honesty patch: signed `outcome=failed` receipts (E1), `HandlerFailure` for explicit failure signaling (E2), `cap_envelope` foot-gun closed (E11), server-side `max_deadline_seconds` ceiling (E7). All four gaps surfaced by cluster testing. | Done |
 | v0.5.3 | Input-validation patch: negative `Content-Length` DoS closed (F1), malformed base64 in signature/holder-proof/receipt fails closed (F2), `max_invocations`/`expires` caveat values validated at issue/attenuate (F3), streaming write-order race fixed (F4), TOFU rejects malformed pubkey base64 (F5). | Done |
+| v0.5.4 | Public-surface polish: README `agent_id` formula corrected (`sha256(alg \|\| base64(pubkey))` to match `spec/PACT_v1.md`), `[project.urls]` added to `pyproject.toml` (Homepage / Source / Issues / Documentation / Changelog / Security policy now visible on PyPI), `SECURITY.md` added with private vulnerability reporting via GitHub advisories, `auto_grant` constructor argument now emits `DeprecationWarning` when explicitly passed (scheduled for removal in v1.0). No wire changes. | Done |
 
 ## Tests
 

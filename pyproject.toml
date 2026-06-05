@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pact-passport"
-version = "0.5.3"
+version = "0.5.4"
 description = "PACT Passport — agent ID. Self-certifying identity, holder-bound capabilities, audit receipts."
 readme = "README.md"
 license = {text = "MIT"}
@@ -25,6 +25,14 @@ dependencies = [
     "pynacl>=1.5.0",
     "zeroconf>=0.131.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/bene-art/pact-passport"
+Source = "https://github.com/bene-art/pact-passport"
+Issues = "https://github.com/bene-art/pact-passport/issues"
+Documentation = "https://github.com/bene-art/pact-passport#readme"
+Changelog = "https://github.com/bene-art/pact-passport/releases"
+"Security policy" = "https://github.com/bene-art/pact-passport/security/policy"
 
 [project.optional-dependencies]
 cbor = ["cbor2>=5.6.0"]

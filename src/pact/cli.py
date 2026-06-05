@@ -63,10 +63,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
         name=name,
         capabilities=caps,
         port=args.port,
-        auto_grant=True,
     )
 
-    # Register a default echo handler for any action in auto-grant mode
+    # Register a default echo handler for any action
     @agent.handle("echo")
     def echo_handler(payload):
         return {"echo": payload}
@@ -126,7 +125,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
             print(f"Invalid JSON payload: {args.payload}")
             sys.exit(1)
 
-    agent = PACTAgent(name=name, auto_grant=True)
+    agent = PACTAgent(name=name)
     result = agent.ask(
         target=args.target,
         action=args.action,
@@ -216,7 +215,7 @@ def cmd_grant(args: argparse.Namespace) -> None:
     if args.no_delegation:
         caveats.append(Caveat("no_further_delegation", True, terminal=True))
 
-    agent = PACTAgent(name=name, auto_grant=False)
+    agent = PACTAgent(name=name)
     token = agent.grant(args.holder, args.action, caveats=caveats or None)
 
     print(f"Capability issued.")
@@ -238,7 +237,7 @@ def cmd_revoke(args: argparse.Namespace) -> None:
     if not name:
         return
 
-    agent = PACTAgent(name=name, auto_grant=False)
+    agent = PACTAgent(name=name)
     if agent.revoke(args.cap_id):
         print(f"Capability {args.cap_id} revoked.")
     else:

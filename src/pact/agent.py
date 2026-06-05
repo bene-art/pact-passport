@@ -9,6 +9,7 @@ import logging
 import signal
 import sys
 import threading
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -34,6 +35,11 @@ from pact.transport.discovery import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel for deprecated `auto_grant` constructor argument. Distinguishes
+# "caller passed nothing" from "caller passed True/False explicitly" so the
+# deprecation warning only fires when the deprecated surface is actually used.
+_AUTO_GRANT_UNSET = object()
 
 
 @dataclass
@@ -66,7 +72,7 @@ class PACTAgent:
         store_dir: Path | None = None,
         host: str = "0.0.0.0",
         port: int = 0,
-        auto_grant: bool = True,  # deprecated v0.5.1 — has no effect
+        auto_grant: Any = _AUTO_GRANT_UNSET,
         idempotency_cache_max: int = 10_000,
         max_deadline_seconds: int = 3600,
     ):
@@ -74,7 +80,16 @@ class PACTAgent:
         self.capabilities = capabilities or []
         self.host = host
         self.port = port
-        self.auto_grant = auto_grant
+        if auto_grant is not _AUTO_GRANT_UNSET:
+            warnings.warn(
+                "PACTAgent(auto_grant=...) is deprecated and has no effect "
+                "since v0.5.1. Remove the argument; it will be removed in v1.0.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.auto_grant = bool(auto_grant)
+        else:
+            self.auto_grant = True
         # Upper bound on REQ deadlines, server-side. A request whose
         # deadline lies further than this in the future is rejected at
         # message validation. Without this, an unbounded deadline +
