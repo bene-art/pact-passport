@@ -13,7 +13,7 @@ Makes any local-agent-kit agent PACT-addressable with 3 lines:
 Incoming PACT REQ messages with intent:"task" are converted to LAK Messages
 and yielded from listen(). The agent's LLM response is sent back as a PACT RES.
 
-Requires: pip install pact-protocol[lak]
+Requires: pip install pact-passport[lak]
 
 **Known limitations** (will be addressed in future v0.x releases):
 

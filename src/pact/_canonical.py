@@ -30,13 +30,13 @@ def canonical_cbor(obj: dict) -> bytes:
     """Serialize a dict to deterministic CBOR bytes.
 
     Uses canonical=True for deterministic key ordering.
-    Requires: pip install pact-protocol[cbor]
+    Requires: pip install pact-passport[cbor]
     """
     try:
         import cbor2
     except ImportError:
         raise ImportError(
-            "CBOR support requires cbor2. Install with: pip install pact-protocol[cbor]"
+            "CBOR support requires cbor2. Install with: pip install pact-passport[cbor]"
         )
     return cbor2.dumps(obj, canonical=True)
 
@@ -44,13 +44,13 @@ def canonical_cbor(obj: dict) -> bytes:
 def decode_cbor(data: bytes) -> dict:
     """Decode CBOR bytes to a dict.
 
-    Requires: pip install pact-protocol[cbor]
+    Requires: pip install pact-passport[cbor]
     """
     try:
         import cbor2
     except ImportError:
         raise ImportError(
-            "CBOR support requires cbor2. Install with: pip install pact-protocol[cbor]"
+            "CBOR support requires cbor2. Install with: pip install pact-passport[cbor]"
         )
     return cbor2.loads(data)
 

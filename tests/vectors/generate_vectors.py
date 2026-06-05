@@ -26,7 +26,7 @@ def keypair_from_seed(seed_hex: str) -> tuple[bytes, bytes]:
 
 
 def main():
-    vectors = {"version": "1", "generated_by": "pact-protocol reference implementation"}
+    vectors = {"version": "1", "generated_by": "pact-passport reference implementation"}
 
     # --- 1. Known keypairs ---
     # Fixed seeds for reproducibility

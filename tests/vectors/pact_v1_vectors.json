@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_by": "pact-protocol reference implementation",
+  "generated_by": "pact-passport reference implementation",
   "keypairs": {
     "agent_a": {
       "seed_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

@@ -1,7 +1,7 @@
 """Async ASGI server for PACT agents via uvicorn.
 
 Optional upgrade from ThreadingHTTPServer. Same endpoints, async dispatch.
-Requires: pip install pact-protocol[fast]
+Requires: pip install pact-passport[fast]
 
 v0.5.1 brought to parity with the sync server: max_body_bytes (#9),
 streaming RES_CHUNK (#11). Read timeout is enforced by uvicorn's
@@ -169,7 +169,7 @@ class AsyncPACTServer:
     """Async PACT server using uvicorn.
 
     Drop-in replacement for PACTServer with better concurrency.
-    Requires: pip install pact-protocol[fast]
+    Requires: pip install pact-passport[fast]
 
     v0.5.1: gains max_body_bytes (issue #9) and streaming response
     support (issue #11). Brings parity with the sync PACTServer.
@@ -199,7 +199,7 @@ class AsyncPACTServer:
             import uvicorn
         except ImportError:
             raise ImportError(
-                "Async server requires uvicorn. Install with: pip install pact-protocol[fast]"
+                "Async server requires uvicorn. Install with: pip install pact-passport[fast]"
             )
 
         app = _make_asgi_app(
