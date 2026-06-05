@@ -5,6 +5,40 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] — 2026-06-05
+
+Source-tree polish + one user-facing bug fix. No wire changes.
+
+### Fixed
+- Three `ImportError` messages previously told users to run `pip install pact-protocol[cbor|fast|lak]` when triggered — that package name is squatted by another publisher on PyPI, so the suggested command failed. Updated to `pact-passport[cbor|fast|lak]` to match the actual package name (renamed 2026-05-01). Affects `_canonical.py:39`, `_canonical.py:53`, `transport/async_server.py:202`.
+- Five docstrings referencing the old `pact-protocol` install command also updated for consistency: `_canonical.py:33`, `_canonical.py:47`, `transport/async_server.py:4`, `transport/async_server.py:172`, `contrib/lak_channel.py:16`.
+- `tests/vectors/generate_vectors.py` and the generated `tests/vectors/pact_v1_vectors.json` carried `"generated_by": "pact-protocol reference implementation"`. Updated to `pact-passport reference implementation` for public test-vector consistency.
+
+### Added
+- `CHANGELOG.md` (this file), `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/PULL_REQUEST_TEMPLATE.md`.
+- `tests/test_cli.py`: 14 CLI smoke tests covering `init`, `identity`, `caps`, `grant`, `revoke`, `receipts`, `peers`, `doctor`, and the auto-resolve-single-agent path. Uses `PACT_HOME` env redirect for store isolation.
+- `tests/integration/test_agent_ask.py`: 3 end-to-end tests exercising `PACTAgent.ask()` (the high-level client API that was completely uncovered). Happy path with capability, unknown target, failed-receipt-on-error.
+
+### Changed
+- `spec/PACT_v1.md` revised to `v1.1.0-draft` (2026-06-05). The §12 addendum sections already documented every wire-affecting change from v0.2.0 through v0.5.3, but supersession over §1–§11 was conversational rather than normative. v1.1 rewrites the §12 preamble to make supersession explicit, adds inline pointers (`→ §12.x`) in the affected §1–§11 sections so top-down readers cannot miss the amendments, expands the §10 conformance checklist from 6 items to 10, and adds new §13 = line-item change summary + versioning policy. Draft status (`-draft`) retained until external validation per HotNets paper §6. **No wire changes.**
+- Ruff lint pass on `src/pact/`: 56 findings closed (51 auto-fixed + 5 manual).
+  - `UP035`: Moved `Callable` / `Iterator` from `typing` to `collections.abc` (5 files).
+  - `UP037`: Removed redundant quoted type annotations.
+  - `UP041`: Replaced `socket.timeout` alias with builtin `TimeoutError` (`transport/server.py`).
+  - `UP017`: Used `datetime.UTC` alias.
+  - `SIM108` / `SIM105`: Replaced if/else blocks with ternaries; replaced try/except/pass with `contextlib.suppress`.
+  - `RUF022`: Sorted `__all__` in `pact/__init__.py`.
+  - `F401`: Removed unused `CBOR_CONTENT_TYPE` import in `transport/client.py` (CBOR client send path is not yet wired through; tracked as issue #27 for v0.6).
+  - `B904`: Three places now use `raise ImportError(...) from None` to suppress the noisy `ModuleNotFoundError` chain on missing optional deps; one place uses `raise ValueError(...) from e` to preserve original parse-failure detail in caveat validation.
+  - `RUF002`: Replaced ambiguous Unicode `×` with `x` in `contrib/lak_channel.py:25` docstring.
+
+### Deferred
+- Client-side CBOR request encoding (asymmetry with server) — tracked as GitHub issue #27 for v0.6.
+- The full v0.6 backlog is now visible as GitHub issues #22 (trusted_issuers), #23 (app-level caveat enforcement), #24 (cross-machine revocation propagation), #25 (post-quantum signatures), #26 (per-token cost accounting), #27 (client-side CBOR).
+
+### Tests
+- 164 → 181. Project-wide coverage 64% → 74%. `cli.py` 0% → 41%. `agent.py` 77% → 83%.
+
 ## [0.5.4] — 2026-06-05
 
 Public-surface polish. No wire changes.
@@ -125,6 +159,7 @@ Initial public release.
 - Deterministic test vectors.
 - 111 unit tests.
 
+[0.5.5]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.5
 [0.5.4]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.4
 [0.5.3]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.3
 [0.5.2]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.2
