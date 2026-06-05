@@ -1,8 +1,10 @@
 # PACT v1 Specification
 
 **Protocol for Agent Capability and Trust**
-Version: 1.0.0-draft
-Date: 2026-04-29
+Version: 1.1.0-draft
+Date: 2026-06-05
+
+> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3, and **supersedes the §1–§11 sections it references**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12 is. A line-item summary of changes is in §13.
 
 ---
 
@@ -210,6 +212,8 @@ Implementations MAY define additional caveat types. Unknown caveats MUST be pres
 
 ### 5.4 Verification Rules
 
+> **Extended by §12.6, §12.7, §12.9, and §12.10.** v1.1 requires fail-closed behavior on missing delegator keys (§12.6), defines `cap_envelope` inline verification (§12.7), enforces the single-issuer trust model with explicit rejection (§12.9), and validates caveat values at issue/attenuate time (§12.10).
+
 1. If `revoked: true`, REJECT.
 2. `holder` MUST match the presenting agent's agent_id.
 3. For root tokens (no `delegation_chain`): `signature` MUST verify against the issuer's public key.
@@ -223,7 +227,9 @@ Implementations MAY define additional caveat types. Unknown caveats MUST be pres
 
 ### 6.1 Message Types
 
-PACT has exactly **two** message types:
+> **Superseded by §12.1.** v1.1 defines **three** message types — `REQ`, `RES`, and `RES_CHUNK` (streaming response variant).
+
+The v1.0 baseline defined two:
 
 | Type | Direction | Purpose |
 |------|-----------|---------|
@@ -231,6 +237,8 @@ PACT has exactly **two** message types:
 | `RES` | B → A | Result, error, or information |
 
 ### 6.2 REQ Message
+
+> **Superseded by §12.2 and §12.7.** v1.1 adds the optional fields `identity_doc`, `cap_envelope`, and `stream`, and makes `holder_proof` **mandatory** whenever `cap_id` is present.
 
 ```json
 {
@@ -262,6 +270,8 @@ Fields:
 
 ### 6.3 RES Message
 
+> **Extended by §12.9.** v1.1 requires receivers to write a signed `outcome=failed` receipt for every error path (not just for completed dispatches).
+
 ```json
 {
   "id": "<uuid>",
@@ -289,6 +299,8 @@ For errors:
 ```
 
 #### Standard Fault Codes
+
+> **Extended by §12.5 and §12.9.** v1.1 adds `unknown_peer`, `holder_proof_required`, `cap_unknown`, `handler_error`, and `deadline_too_far`.
 
 | code | meaning |
 |------|---------|
@@ -335,8 +347,10 @@ Each agent signs their own view. No cooperation required.
 }
 ```
 
-- `outcome`: One of `"completed"`, `"failed"`, `"timeout"`.
+- `outcome`: One of `"completed"`, `"failed"`, `"cancelled"`. *(v1.1 supersedes v1.0's `"timeout"` value; see §12.9.)*
 - `signature`: Ed25519 signature of canonical JSON (excluding `signature`).
+
+> **Extended by §12.9.** v1.1 requires receivers to write signed receipts on **every** dispatch outcome — including rejections at any pipeline step (deadline_exceeded, invalid_signature, holder_proof_required, cap_unknown, capability_invalid, no_handler, handler_error, deadline_too_far). Pre-v1.1 implementations omitted receipts on failure paths.
 
 If both parties publish receipts, a third party can compare them. Discrepancies are evidence.
 
@@ -355,6 +369,8 @@ If both parties publish receipts, a third party can compare them. Discrepancies 
 All protocol responses use HTTP 200. The `status` field inside the body carries the protocol-level outcome. HTTP 4xx/5xx is reserved for transport failures.
 
 Content-Type: `application/json` (v1). Future versions MAY support `application/cbor`.
+
+> **Extended by §12.4 and §12.10.** v1.1 defines `application/x-ndjson` over chunked transfer for streaming responses (§12.4), and requires HTTP servers to validate `Content-Length` (reject non-integer, ≤ 0, or oversize values) to close a slow-loris DoS path (§12.10).
 
 ### 8.2 mDNS Discovery
 
@@ -381,16 +397,22 @@ TXT records:
 
 ## 10. Interoperability
 
-An implementation is PACT v1 compatible if it can:
+An implementation is **PACT v1.1 compatible** if it can:
 
 1. Derive `agent_id` from a known public key and produce the expected value.
 2. Serialize JSON canonically and produce identical bytes.
 3. Sign and verify Ed25519 signatures.
-4. Issue and verify capability tokens (including attenuation chains).
-5. Build and verify REQ/RES messages with holder proofs.
-6. Produce and verify unilateral receipts.
+4. Issue and verify capability tokens (including attenuation chains), with fail-closed behavior on missing delegator keys (§12.6) and validated caveat values (§12.10).
+5. Build and verify REQ/RES messages with holder proofs, including: `holder_proof` mandatory when `cap_id` is present (§12.2); reject unknown peers unless `identity_doc` is included (§12.2); reject REQs whose deadline exceeds the configured ceiling (§12.9).
+6. Send and receive RES_CHUNK streaming responses over `application/x-ndjson` + HTTP chunked transfer (§12.1, §12.3, §12.4).
+7. Verify inline `cap_envelope` for cross-machine delegation, requiring `cap_id` to be present alongside (§12.7).
+8. Produce signed unilateral receipts for **every** dispatch outcome — `completed`, `failed`, or `cancelled` (§12.9).
+9. Validate HTTP `Content-Length` (reject non-integer, ≤ 0, or oversize values) (§12.10).
+10. Fail closed on malformed base64 in any signature, holder-proof, receipt, or identity-doc field (§12.10).
 
-All of the above are testable against the provided test vectors.
+A v1.0-only implementation (sections 1–11 alone) is **not** v1.1 compatible and will fail handshake with current PACT peers.
+
+All of the above are testable against the provided test vectors (§11).
 
 ---
 
@@ -409,13 +431,13 @@ Test vectors are provided in `tests/vectors/pact_v1_vectors.json`. They include:
 
 ---
 
-## 12. v0.2 — v0.5 Addendum (the parts §1–§11 don't describe)
+## 12. v1.1 amendments (supersede §1–§11)
 
-Sections 1–11 above were frozen at v0.1 and represent the original
-protocol design. Releases v0.2 through v0.5 added the fields and rules
-below. The reference implementation is the source of truth; this
-addendum exists so an alternate implementer doesn't have to read
-agent.py to know what they're missing.
+Sections 1–11 above are the v1.0.0-draft baseline (reference implementation v0.1.4).
+
+**Section 12 is normative for v1.1.** Each sub-section supersedes the §1–§11 section it references. Where §12.x and §1–§11 conflict, §12.x is authoritative. The reference implementation (v0.5.4+) tracks §12.
+
+An implementation matching §1–§11 alone will fail handshake against current PACT peers. The conformance checklist in §10 enumerates what §12 requires beyond the v1.0 baseline.
 
 ### 12.1 Three message types (§6.1 update)
 
@@ -627,3 +649,36 @@ ensures that on retry, the cache hit returns the cached chunks
 without re-execution and without a second receipt.
 
 An implementation that produces identical outputs for these inputs is interoperable.
+
+---
+
+## 13. Changes from v1.0.0-draft to v1.1.0-draft
+
+Line-item summary for implementers tracking the diff. Each row points to the §12 sub-section that defines the change normatively.
+
+| § | Change | Wire-affecting? | Reference impl version |
+|---|---|---|---|
+| §12.1 | Third message type `RES_CHUNK` for streaming responses | Yes (new type) | v0.5.0 |
+| §12.2 | New optional REQ fields: `identity_doc`, `cap_envelope`, `stream` | Yes (new fields) | v0.2.0–v0.5.0 |
+| §12.2 | `holder_proof` MUST be present whenever `cap_id` is present | Yes (tightening) | v0.2.0 |
+| §12.2 | Receivers MUST reject unknown peers unless `identity_doc` is included for TOFU | Yes (tightening) | v0.2.0 |
+| §12.2 | Rotation continuity: first post-rotation REQ should carry fresh `identity_doc`; receiver verifies against cached `next_key_digest` | Yes (clarification + new verification path) | v0.3.1 |
+| §12.3 | RES_CHUNK schema (independent signature per chunk; `chunk_seq`, `chunk_final`) | Yes (new schema) | v0.5.0 |
+| §12.4 | Streaming transport: `application/x-ndjson` over HTTP chunked transfer | Yes (new transport mode) | v0.5.0 |
+| §12.5 | New fault codes: `unknown_peer`, `holder_proof_required`, `cap_unknown`, `handler_error` | Yes (vocabulary extension) | v0.2.0–v0.5.0 |
+| §12.6 | Capability chain verification MUST be fail-closed on missing delegator keys | Yes (tightening; was silent-pass) | v0.2.0 |
+| §12.7 | `cap_envelope` inline verification rules; `cap_id` MUST accompany `cap_envelope` | Yes (new verification path + tightening) | v0.4.0, tightened v0.5.2 |
+| §12.8 | Idempotency cache + per-cap invocation counts SHOULD persist across restarts | No (implementation guidance) | v0.3.0 |
+| §12.9 | Signed `outcome=failed` receipts on dispatch errors (all rejection paths) | Yes (audit-trail requirement) | v0.5.2 |
+| §12.9 | Receipt outcome enum is `completed` / `failed` / `cancelled` (supersedes v1.0 `timeout`) | Yes (vocabulary change) | v0.5.2 |
+| §12.9 | Server-side `max_deadline_seconds` ceiling; new fault `deadline_too_far` | Yes (tightening + new fault code) | v0.5.2 |
+| §12.9 | Single-issuer trust model: capabilities whose `issuer` ≠ verifier's `agent_id` MUST be rejected | Clarification (was implicit) | v0.5.x |
+| §12.10 | Signature/key/receipt verifiers MUST fail closed on malformed base64 (no propagated `binascii.Error`) | Yes (tightening) | v0.5.3 |
+| §12.10 | TOFU MUST reject identity-doc with unparseable `public_key` field | Yes (tightening) | v0.5.3 |
+| §12.10 | Caveat values (`max_invocations`, `expires`) MUST be validated at issue/attenuate time, not at verification | Yes (tightening; surfaces bugs at source) | v0.5.3 |
+| §12.10 | HTTP `Content-Length` MUST be validated: non-integer → 400; ≤ 0 → 400; > `max_body_bytes` → 413 | Yes (closes slow-loris DoS path) | v0.5.3 |
+| §12.10 | During RES_CHUNK streaming completion, idempotency cache MUST be persisted before receipt | Yes (durability ordering) | v0.5.3 |
+
+**Versioning policy.** PACT spec versions follow semver. v1.0 → v1.1 indicates additive and tightening changes — any conformant v1.1 implementation is a *strict subset* of v1.0 behavior (v1.1 rejects things v1.0 allowed; v1.1 supports things v1.0 didn't define). A v2.0 would indicate breaking changes that v1.1 implementations cannot interpret. **Draft status (`-draft`) remains** until external validation: a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`.
+
+**Test vectors.** `tests/vectors/pact_v1_vectors.json` is current as of v1.1.0-draft. The reference implementation passes its own vector check (`tests/test_vectors.py`) on every commit.
