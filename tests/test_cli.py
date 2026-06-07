@@ -12,6 +12,7 @@ SimpleNamespace mimicking argparse.Namespace.
 from __future__ import annotations
 
 import json
+import sys
 import types
 
 import pytest
@@ -194,6 +195,12 @@ def test_peers_empty(isolated_store, capsys):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="doctor's POSIX permission check (0o600) fails on Windows; "
+           "Windows filesystem reports 0o666 regardless of chmod. "
+           "Matches the existing skip pattern in tests/test_doctor.py::test_doctor_bad_permissions.",
+)
 def test_doctor_clean_identity_reports_passes(isolated_store, capsys):
     cli.cmd_init(_args(name="alice"))
     capsys.readouterr()

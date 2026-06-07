@@ -199,6 +199,10 @@ while True:
 """
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="signal.SIGKILL is POSIX-only; Windows uses TerminateProcess via proc.kill()",
+)
 def test_c1_subprocess_sigkill_durability(tmp_path, capsys):
     """Real subprocess + SIGKILL durability test. Spawns a PACT agent in
     a child process, lets it create its identity on disk, then SIGKILLs
@@ -208,6 +212,8 @@ def test_c1_subprocess_sigkill_durability(tmp_path, capsys):
 
     This is a strict subset of what the in-process tests above cover, but
     uses real signal.SIGKILL on a real subprocess for empirical realism.
+    Skipped on Windows because signal.SIGKILL is not defined there; the
+    in-process tests above already cover the protocol-semantic claim.
     """
     store_dir = tmp_path / "alice"
     store_dir.mkdir()
