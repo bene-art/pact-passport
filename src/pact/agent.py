@@ -346,6 +346,13 @@ class PACTAgent:
             return self._dispatch_err(ctx, "holder_proof_invalid",
                                       "Holder proof verification failed")
 
+        # Bind the verified token to ctx BEFORE the rate-limit check so
+        # that a rate-limited refusal still attributes the attempt to
+        # the specific cap in the receipt log (issuer-relevant audit
+        # trail for any rate-limited dispatch — necessary precondition
+        # for the v0.6 V-tier visa receipt-fidelity threshold).
+        ctx.cap_token = token
+
         # Rate limit (max_invocations caveat). Read-then-increment is
         # serialized by the outer _task_lock.
         max_inv = self._get_max_invocations(token)
@@ -360,7 +367,6 @@ class PACTAgent:
             self._invocation_counts[token.cap_id] = count + 1
             self._persist_invocation_counts()
 
-        ctx.cap_token = token
         return None
 
     def _step_resolve_action(self, ctx: _DispatchCtx) -> dict | None:
