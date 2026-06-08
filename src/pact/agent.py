@@ -654,15 +654,32 @@ class PACTAgent:
         """Wrap a generator handler: sign each yielded payload as a
         RES_CHUNK and collect for caching. Issue #11.
 
-        On normal completion: writes a single receipt referencing all
-        chunks, caches the chunk list under idempotency_key.
-        On generator failure (handler raised): emits an error chunk
-        with chunk_final=true and writes a 'failed' receipt.
-        On consumer disconnect: cancellation is detected at the HTTP
-        layer; the receipt is written with outcome='cancelled' there.
+        Three exit paths, all of which produce a signed receipt:
+
+        - **Normal completion**: outcome=``completed``; chunk_dicts has
+          all chunks; idempotency cache populated for replay.
+        - **Handler raised**: outcome=``failed``; last chunk is a
+          signed error chunk; idempotency cache NOT populated (so a
+          retry re-executes the handler).
+        - **Consumer disconnect**: outcome=``cancelled``; chunk_dicts
+          has whatever chunks were emitted before disconnect; cache
+          NOT populated. Triggered by ``GeneratorExit`` raised at the
+          suspended ``yield`` when the transport's
+          ``_send_stream`` calls ``chunks_iter.close()`` after a
+          ``BrokenPipeError``. The cancelled receipt closes Bug 7
+          (GH #30) — see ``bug7_fix_design.md``.
+
+        The receipt-write block lives in a ``finally`` so it runs on
+        all three exit paths. ``outcome`` is a state variable
+        initialized to ``cancelled``; completion and failure paths
+        overwrite it explicitly. ``GeneratorExit`` (which is a
+        ``BaseException``, not an ``Exception``) bypasses both
+        explicit assignments, the default sticks, and the cancelled
+        receipt records the partial chunk set.
         """
         msg, identity = ctx.msg, ctx.identity
         chunk_dicts: list[dict] = []
+        outcome = "cancelled"   # default; overwritten on completed or failed
         seq = 0
         last_payload = None
 
@@ -676,53 +693,55 @@ class PACTAgent:
             return chunk.to_dict()
 
         try:
-            for payload in source:
-                if last_payload is not None:
-                    # Emit the previously held chunk as non-final
-                    out = _build_and_sign(last_payload, final=False)
-                    chunk_dicts.append(out)
-                    yield out
-                last_payload = payload if isinstance(payload, dict) else {"result": payload}
-            # Emit the final chunk
-            if last_payload is None:
-                last_payload = {}  # empty stream
-            out = _build_and_sign(last_payload, final=True)
-            chunk_dicts.append(out)
-            yield out
-        except Exception as e:
-            # Handler raised mid-stream; emit an error chunk as the terminal
-            err_chunk = build_res_chunk(
-                identity._private_key, identity.agent_id, msg,
-                chunk_seq=seq, chunk_final=True,
-                payload={}, status="error",
-                fault={"code": "handler_error", "detail": str(e)},
-            ).to_dict()
-            chunk_dicts.append(err_chunk)
-            yield err_chunk
-
-        # Persist + receipt after the stream completes. Order matters:
-        # idempotency cache MUST be written before the receipt. If the
-        # process crashes between the receipt write and the cache write,
-        # a retry of the same idempotency_key would re-execute the
-        # handler and write a SECOND receipt — auditors then see two
-        # receipts for one logical request. Caching first guarantees
-        # the retry hits the cache instead.
-        self._store.save_message(self.name, msg.to_dict())
-        for chunk in chunk_dicts:
-            self._store.save_message(self.name, chunk)
-        outcome = "completed" if chunk_dicts and chunk_dicts[-1].get("status") != "error" else "failed"
-
-        # Cache full chunk list for idempotent replay (#11).
-        if msg.idempotency_key and outcome == "completed":
-            self._cache_idempotent_response(msg, chunk_dicts)
-
-        self._store.save_receipt(self.name, create_receipt(
-            identity._private_key, identity.agent_id,
-            task_ref=msg.id,
-            refs=[msg.id] + [c["id"] for c in chunk_dicts],
-            outcome=outcome,
-            extra=self._visa_receipt_extra(ctx),
-        ))
+            try:
+                for payload in source:
+                    if last_payload is not None:
+                        # Emit the previously held chunk as non-final
+                        out = _build_and_sign(last_payload, final=False)
+                        chunk_dicts.append(out)
+                        yield out
+                    last_payload = payload if isinstance(payload, dict) else {"result": payload}
+                # Emit the final chunk
+                if last_payload is None:
+                    last_payload = {}  # empty stream
+                out = _build_and_sign(last_payload, final=True)
+                chunk_dicts.append(out)
+                yield out
+                outcome = "completed"
+            except Exception as e:
+                # Handler raised mid-stream; emit an error chunk as the terminal
+                err_chunk = build_res_chunk(
+                    identity._private_key, identity.agent_id, msg,
+                    chunk_seq=seq, chunk_final=True,
+                    payload={}, status="error",
+                    fault={"code": "handler_error", "detail": str(e)},
+                ).to_dict()
+                chunk_dicts.append(err_chunk)
+                yield err_chunk
+                outcome = "failed"
+            # GeneratorExit (consumer disconnect) is a BaseException —
+            # not caught here; falls through to finally with outcome
+            # still set to "cancelled".
+        finally:
+            # Persist + receipt on every exit path. Order matters:
+            # idempotency cache MUST be written before the receipt and
+            # ONLY on completed outcome. Cancelled streams don't
+            # populate the cache — a retry with the same
+            # idempotency_key should re-execute, not replay a partial.
+            # Failed streams also don't cache — the error is a real
+            # handler outcome, not something to replay (#11).
+            self._store.save_message(self.name, msg.to_dict())
+            for chunk in chunk_dicts:
+                self._store.save_message(self.name, chunk)
+            if msg.idempotency_key and outcome == "completed":
+                self._cache_idempotent_response(msg, chunk_dicts)
+            self._store.save_receipt(self.name, create_receipt(
+                identity._private_key, identity.agent_id,
+                task_ref=msg.id,
+                refs=[msg.id] + [c["id"] for c in chunk_dicts],
+                outcome=outcome,
+                extra=self._visa_receipt_extra(ctx),
+            ))
 
     def _cache_idempotent_response(self, msg: PACTMessage, response) -> None:
         """Cache a one-shot dict OR a streaming chunk list under the

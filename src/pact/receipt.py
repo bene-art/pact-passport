@@ -28,7 +28,8 @@ def create_receipt(
         agent_id: The signing agent's ID.
         task_ref: The message ID of the original REQ.
         refs: All message IDs involved in this interaction.
-        outcome: "completed", "failed", or "timeout".
+        outcome: "completed", "failed", or "cancelled" (spec §12.9 —
+            v1.1 supersedes v1.0's "timeout").
         extra: Optional dict of additional audit fields (e.g. V-tier visa
             metadata) merged into the receipt before signing. Reserved
             keys (``type``, ``agent``, ``task_ref``, ``refs``, ``outcome``,

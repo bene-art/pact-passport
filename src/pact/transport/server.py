@@ -169,11 +169,22 @@ class PACTHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            # Consumer disconnected mid-stream. The generator inside
-            # dispatch will be GC'd and stop iterating. The receipt
-            # already written by _run_streaming_handler will reflect
-            # whatever chunks made it.
+            # Consumer disconnected mid-stream. Explicitly close the
+            # iterator so the streaming generator inside dispatch
+            # receives GeneratorExit synchronously — its finally block
+            # writes the cancelled receipt before this handler
+            # returns. Without the explicit close, cleanup depends on
+            # GC timing and a test that reads the receipt log
+            # immediately after disconnect can race the collector.
+            # Closes Bug 7 (GH #30) — see bug7_fix_design.md.
             logger.info("client disconnected mid-stream")
+            try:
+                chunks_iter.close()
+            except Exception:
+                # close() can raise if the generator's finally block
+                # itself raises. Log and continue — we're already in
+                # the error path; don't mask the original disconnect.
+                logger.exception("chunks_iter.close() raised during cleanup")
 
 
 class PACTServer:
