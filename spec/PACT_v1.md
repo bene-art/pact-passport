@@ -1,10 +1,10 @@
 # PACT v1 Specification
 
 **Protocol for Agent Capability and Trust**
-Version: 1.1.0-draft
-Date: 2026-06-05
+Version: 1.2.0-draft
+Date: 2026-06-08
 
-> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3, and **supersedes the §1–§11 sections it references**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12 is. A line-item summary of changes is in §13.
+> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3 and **supersedes the §1–§11 sections it references**. Section 14 documents the v1.2 additions introduced in reference implementation v0.6 (V-tier visa machinery, per-link `parent_cap_id`, cancelled-receipt emission) and **supersedes/extends §12 where they overlap**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12 *and §14* is. Changelogs in §13 (v1.0→v1.1) and §15 (v1.1→v1.2).
 
 ---
 
@@ -682,3 +682,152 @@ Line-item summary for implementers tracking the diff. Each row points to the §1
 **Versioning policy.** PACT spec versions follow semver. v1.0 → v1.1 indicates additive and tightening changes — any conformant v1.1 implementation is a *strict subset* of v1.0 behavior (v1.1 rejects things v1.0 allowed; v1.1 supports things v1.0 didn't define). A v2.0 would indicate breaking changes that v1.1 implementations cannot interpret. **Draft status (`-draft`) remains** until external validation: a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`.
 
 **Test vectors.** `tests/vectors/pact_v1_vectors.json` is current as of v1.1.0-draft. The reference implementation passes its own vector check (`tests/test_vectors.py`) on every commit.
+
+---
+
+## 14. v1.2 amendments (extend §12; supersede §1–§11)
+
+Section 14 is normative for v1.2 and is tracked by reference implementation **v0.6**. Where §14.x conflicts with §12.x or §1–§11, §14.x is authoritative. §14 introduces the **V-tier visa mechanism** for session-bounded interaction with passport-less peers, closes two correctness gaps in earlier versions (multi-hop chain verification at depth ≥ 3, and the missing-receipt-on-stream-partition path), and acknowledges one known limitation that defers to v1.3 / reference implementation v0.7.
+
+### 14.1 Trust gradient (§3 extension)
+
+PACT exposes a three-tier trust gradient:
+
+| Tier | Issued by | Identity established? | Wire shape |
+|---|---|---|---|
+| **Passport** | The holder itself (KERI-style self-certifying identifier) | Yes | Standard `from_agent` + cap chain (§5) |
+| **Visa** | The destination agent (gatekeeper) | **No — binds the session, not the principal** | Capability token with `visa: true` (§14.2) |
+| **Refusal** | The gatekeeper | N/A | Fault response, no session created |
+
+A visa is a **session-scoped, attenuated, non-delegable capability token** that a gatekeeper issues to a counterparty whose identity it cannot establish. The visa binds the *session* via an ephemeral key, not the *principal*. The honest legal analogue is a **stateless-person transit document**, not a tourist visa: it grants bounded passage precisely because identity cannot be established, and the issuer accepts the risk by scoping tightly and logging everything.
+
+### 14.2 Visa capability extension (§5 extension)
+
+A visa is a `CapabilityToken` with three additional optional fields. All three are part of `signable_dict` and therefore covered by the issuer's signature:
+
+| Field | Type | Required when | Purpose |
+|---|---|---|---|
+| `visa` | bool (`true`) | This cap is a visa | Routes verification to visa-specific paths (§14.4) |
+| `nonce` | string (url-safe base64, 16-22 bytes) | This cap is a visa | Server-issued; signed by holder on use to bind the session (§14.4) |
+| `ephemeral_key_fingerprint` | string (`sha256:<hex>`) | This cap is a visa | Gatekeeper-internal audit; not surfaced on the wire to other parties |
+
+A visa MUST carry the caveat `no_further_delegation: true` (terminal). A visa SHOULD carry a tight `expires` caveat (default 30 s) and SHOULD carry `max_invocations: 1`. The visa's `issuer` MUST be the gatekeeper's own `agent_id` (single-issuer trust model, per §12.9 inherits).
+
+### 14.3 The `request_visa` intent (§6 extension)
+
+A passport-less peer requests a visa by sending a REQ with `intent: "request_visa"`. The payload MUST contain `{"action": "<requested_action_name>"}`. The peer MUST include an inline `identity_doc` (TOFU per §12.2); the message is signed by the ephemeral key.
+
+The gatekeeper runs an **issuance policy** (§14.5). On grant, the response payload is `{"visa": <full_cap_dict>, "nonce": "<server_issued_nonce>"}`. On refusal, the response is `{"status": "error", "fault": {"code": "denied", "detail": "denied"}}`. The refusal MUST be opaque to the peer; the gatekeeper records the full policy rationale only in its own receipt (§14.7).
+
+### 14.4 Visa-aware `holder_proof` (§5.4 extension)
+
+When `cap_envelope` carries `visa: true`, the verification of `holder_proof` is modified:
+
+- For a non-visa cap (§12.2): `holder_proof` is a signature over `msg.id` using the holder's key.
+- **For a visa: `holder_proof` MUST be a signature over the visa's `nonce` field** using the ephemeral key whose `agent_id` matches `cap.holder`.
+
+This binding ensures a captured `holder_proof` cannot be replayed against a different visa (whose nonce differs). All other §5.4 verification (issuer check, holder match, caveat enforcement, chain verification) applies unchanged.
+
+### 14.5 Visa issuance policy hook (new)
+
+A gatekeeper that accepts visa requests MUST implement an issuance-policy callable with the signature:
+
+```
+policy(ctx: VisaContext) -> VisaGrant | VisaRefuse
+```
+
+`VisaContext` carries gatekeeper-observed values:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `action` | string | The action the peer requested |
+| `payload_hash` | string (`sha256:<hex>`) | Canonical-JSON hash of the request payload |
+| `peer_network_id` | string | See §14.6 |
+| `recent_visa_count_window` | int | Count of visas issued to this `peer_network_id` in the prior 60 s |
+| `resource_headroom` | float (0.0–1.0) | Implementation-defined load signal; default 1.0 |
+
+`VisaGrant` returns the caveat list to attach to the visa. `VisaRefuse` returns a `reason` string that MUST be recorded in the gatekeeper's receipt but MUST NOT be returned to the peer.
+
+**Default shipped policy.** Implementations SHALL ship a default policy that issues a visa only when ALL of the following hold:
+
+1. `action` is opt-in (the handler was registered with `visa_eligible=true`); unannotated handlers default to refusal.
+2. The handler declares `idempotent=true`.
+3. The handler declares `payload_bytes ≤ 4096` and `compute_ms ≤ 100`.
+4. `recent_visa_count_window` ≤ 4 (i.e., fewer than 5 visas in the prior 60 s window for this `peer_network_id`).
+
+The default policy's caveat ceiling: `expires` = now + 30 s, `max_invocations: 1`, `no_further_delegation: true`. All other requests → refusal.
+
+**Concurrency.** `recent_visa_count_window` MUST be read at issuance time, and the issuance path MUST be serialized per `peer_network_id` so the rate-ceiling read-modify-write cannot race. Without this, two threads observing `count == 4` could both grant, breaching the ceiling.
+
+### 14.6 `peer_network_id` derivation (new)
+
+`peer_network_id` is the source IPv4 /24 prefix (or IPv6 /48) observed at the gatekeeper's transport boundary at issuance time. Loopback addresses MAY be aggregated as a single sentinel (`loopback:<host>`). Addresses the gatekeeper cannot observe MUST yield `peer_network_id = "unknown"`; the default policy MUST refuse on `"unknown"`.
+
+This aggregation key is *intentionally naive* — trivially rotatable on any cloud provider — and is the chosen v1.2 default because the limitation is honest. Stronger aggregation keys (TLS-session-bound, post-handshake-derived, peer-network attestation) are non-normative future work and may extend §14.6 in v1.3.
+
+### 14.7 Receipts under visa (§7 extension)
+
+Every visa-related dispatch MUST produce a signed receipt with the standard fields (§7) plus visa-specific audit fields:
+
+| Receipt event | Required extra fields |
+|---|---|
+| `event_type: "visa_grant"` | `visa_cap_id`, `ephemeral_key_fingerprint`, `action`, `peer_network_id`, `visa_nonce`, `policy_id` |
+| `event_type: "visa_refused"` | `ephemeral_key_fingerprint`, `action`, `peer_network_id`, `rationale`, `policy_id`. `rationale` MUST NOT appear in any peer-visible response. |
+| `event_type: "visa_use"` | `visa_cap_id`, `ephemeral_key_fingerprint`, `action`, `visa_nonce`. Emitted on both successful and refused visa-use dispatches; the standard `outcome` field distinguishes (`completed` / `failed`). |
+
+The receipt MUST allow post-hoc reconstruction of the full compromise window from receipts alone — issuer, visa_cap_id, ephemeral_key_fingerprint, action, signed nonce, and timestamp must all be present on every record. The dispatch pipeline MUST bind the verified visa to the dispatch context **before** rate-limit and other refusal checks so that refused-use receipts carry full attribution (this implementation defect, closed in reference v0.6, was Bug 8 of the running case study).
+
+### 14.8 `DelegationLink.parent_cap_id` (§5.4 update — Bug 6 fix)
+
+Each `DelegationLink` minted under v1.2 MUST carry a `parent_cap_id` field recording the cap_id signed by that link at its own attenuation step. The verifier MUST check each link's signature against `link.parent_cap_id` rather than against `token.parent` (the final token's parent).
+
+```
+DelegationLink {
+  "from":           "<delegator_agent_id>",
+  "sig":            "<base64>",
+  "parent_cap_id":  "<uuid of the cap this link signed>"   // v1.2+
+}
+```
+
+**Pre-v1.2 migration window.** A v1.2 verifier MAY accept a chain link lacking `parent_cap_id` by falling back to `token.parent`. When it does so, it MUST emit a `DeprecationWarning` indicating pre-v1.2 chain format. The fallback admits clean chains only at depth K = 2 (where `link.parent_cap_id` and `token.parent` coincide); chains at depth K ≥ 3 in the pre-v1.2 format will be rejected, which is the existing v1.1 behavior. **v1.3 verifiers MUST reject any chain link lacking `parent_cap_id`.**
+
+This change closes Bug 6 of the case study: pre-v1.2 verifiers checked every link against `token.parent`, which accidentally coincided with each link's signed value only at K = 2. At K ≥ 3 every clean chain was rejected.
+
+### 14.9 Cancelled receipt emission (§12.9 implementation alignment — Bug 7 fix)
+
+§12.9 specifies `outcome ∈ {"completed", "failed", "cancelled"}`, but pre-v0.6 reference implementations never emitted `"cancelled"` — a streaming `BrokenPipeError` skipped the receipt-write block by raising `GeneratorExit` (a `BaseException`, not `Exception`) past the existing `except Exception` clause. v1.2 reference implementations MUST emit a signed receipt with `outcome="cancelled"` on every streaming partition, referencing the chunks that were emitted before the disconnect. The receipt-write block MUST be reachable from every exit path (normal completion, handler raise, consumer disconnect). The idempotency cache MUST NOT be populated on cancelled outcomes; a retry with the same `idempotency_key` MUST re-execute the handler.
+
+This closes Bug 7 of the case study and aligns the implementation with the v1.1 spec text.
+
+### 14.10 Known limitation: rogue-delegator forgery (Bug 9, deferred to v1.3)
+
+A capability verifier in v1.2 trusts the values of `action` and `caveats` written into the child cap dict, rather than re-deriving them from the legitimate chain. A delegator whose private key has been compromised can construct a child cap with a different `action` or with caveats stripped, re-sign it with the compromised key, and the v1.2 verifier accepts it (because every chain link still verifies against its stable `parent_cap_id` and the outer signature is valid).
+
+**Threat model.** This vulnerability requires compromise of an intermediate delegator's private key. With that compromise, the attacker can mint arbitrary children — including children with widened authority — beneath the compromised delegator's position in the chain. Damage is bounded to caps downstream of the compromised key; the original issuer and any siblings are unaffected.
+
+**Status in v1.2.** Known and deferred. v1.3 verifiers SHOULD walk the delegation chain to accumulate the legitimate `action` and caveat set from each link, rejecting children whose declared values diverge. The wire shape that supports this may require chain links to also commit to the child's cap_id (or to the accumulated caveat set); the trade-off is open as of 2026-06-08.
+
+**Implementations.** v1.2 implementations MAY add this check as an optional verifier mode; doing so does not break v1.2 compliance.
+
+---
+
+## 15. Changes from v1.1.0-draft to v1.2.0-draft
+
+Line-item summary for implementers tracking the diff. Each row points to the §14 sub-section that defines the change normatively.
+
+| § | Change | Wire-affecting? | Reference impl version |
+|---|---|---|---|
+| §14.1 | Three-tier trust gradient (passport / visa / refusal) added to §3 | No (framing) | v0.6 |
+| §14.2 | `CapabilityToken` gains optional `visa`, `nonce`, `ephemeral_key_fingerprint` fields | Yes (new optional fields; signable) | v0.6 |
+| §14.3 | New REQ `intent="request_visa"`; visa-issuance response shape | Yes (new intent + new payload shape) | v0.6 |
+| §14.4 | When cap is a visa, `holder_proof` MUST sign the visa's `nonce` (not `msg.id`) | Yes (tightening; visa-specific path) | v0.6 |
+| §14.5 | Visa issuance policy hook contract + default shipped policy + per-peer issuance serialization | No (implementation guidance + new internal contract) | v0.6 |
+| §14.6 | `peer_network_id` is source IPv4 /24 or IPv6 /48 (intentionally naive v1.2 default) | No (implementation guidance) | v0.6 |
+| §14.7 | Receipts under visa carry `event_type` + visa-specific audit fields; visa binding MUST precede rate-limit refusal | Yes (audit-trail requirement; closes Bug 8) | v0.6 |
+| §14.8 | `DelegationLink` gains required-from-v1.2 `parent_cap_id` field; verifier checks each link's signature against its own contemporaneous parent; pre-v1.2 fallback with `DeprecationWarning` | Yes (new field, tightening) | v0.6 |
+| §14.9 | Cancelled-receipt emission is now mandatory on streaming partition (closes spec-vs-implementation gap from §12.9) | Yes (audit-trail requirement; closes Bug 7) | v0.6 |
+| §14.10 | Rogue-delegator forgery (Bug 9) acknowledged as known v1.2 limitation, deferred to v1.3 | Clarification (no behavior change) | v0.6 |
+
+**Versioning policy continued.** v1.1 → v1.2 indicates additive amendments (the V-tier visa mechanism) and tightening fixes (Bug 6 + Bug 7 + Bug 8). v1.2 verifiers accept caps in either v1.1 or v1.2 chain-link format; v1.3 will drop the v1.1 fallback. **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`. The V-tier surface (§14.1–§14.7) and the Bug 6 chain-link tightening (§14.8) are the new conformance requirements for v1.2.
+
+**Test vectors.** `tests/vectors/pact_v1_vectors.json` is current as of v1.1.0-draft. A v1.2 vector update covering visa caps + per-link `parent_cap_id` is pending; the reference implementation's full test suite (`tests/`) exercises the v1.2 paths in the meantime.
