@@ -3,51 +3,27 @@
 Tests context-bound delegation trace verification under cap_envelope
 chains at depths K ∈ {2, 3, 5, 7, 10}.
 
-EMPIRICAL FINDING (run 2026-06-07 against v0.5.5):
------------------------------------------------------
-Multi-hop chain verification is BROKEN at depths > 2.
+HISTORICAL FINDING (2026-06-07, against v0.5.5):
+-------------------------------------------------
+Multi-hop chain verification was BROKEN at depths > 2. The bug was in
+``verify_capability`` (src/pact/capability.py:325-335):
 
-The bug is in `verify_capability` (src/pact/capability.py:325-335):
   for link in token.delegation_chain:
       if not crypto.verify(token.parent.encode(), link_sig, link_key):
           return CapabilityResult(False, "Invalid delegation chain link...")
 
-Every chain link's signature is checked against `token.parent` — the
+Every chain link's signature was checked against ``token.parent`` — the
 parent cap_id of the FINAL token. But each link signed a DIFFERENT
-parent at the time of that attenuation:
+parent at the time of that attenuation. At depth K=2 the two values
+coincide accidentally; at K>=3 every clean chain is rejected.
 
-  - link[0] (A1 attenuates root → cap_1): A1 signed root.cap_id
-  - link[1] (A2 attenuates cap_1 → cap_2): A2 signed cap_1.cap_id
-  - link[2] (A3 attenuates cap_2 → cap_3): A3 signed cap_2.cap_id
-
-At verification of cap_3, all three link signatures are checked against
-cap_3.parent (= cap_2.cap_id). Only link[2] verifies. link[0] and
-link[1] signed earlier cap_ids the verifier no longer has.
-
-At depth 2 (one chain link), the bug is silent — the single link's
-parent IS the final token's parent. At depth ≥ 3, all chains fail.
-
-Spec §5.2 prose: "Each delegation_chain link's sig MUST verify against
-that link's from agent's public key, signing the parent cap_id" — the
-phrase "the parent cap_id" is ambiguous (final cap's parent? each
-link's parent?). The code implements the former; honest multi-hop
-support requires the latter. This is a real correctness bug, not just
-a spec-tightness gap like C4.
-
-Fix path (post-paper, tracked as v0.6 issue): verify_capability must
-walk the chain and reconstruct or carry the intermediate cap_ids,
-verifying each link against its actual signed-over cap_id rather than
-against the final token's parent.
-
-This experiment therefore reports:
-  - At K=2: all 5 variants behave as predicted (control accepts;
-    tampers reject). The protocol property works at depth 2.
-  - At K ∈ {3, 5, 7, 10}: even the clean chain is rejected, surfacing
-    the multi-hop verification bug. Tamper variants are vacuously
-    rejected (the chain breaks regardless of tampering).
-
-The finding is the K ≥ 3 control rejection. The K=2 variants confirm
-the property holds at the shallowest interesting depth.
+FIX (2026-06-08, v0.6, see ``bug6_fix_design.md`` and GH #29):
+--------------------------------------------------------------
+``DelegationLink`` gained a ``parent_cap_id`` field. ``attenuate()``
+records what each link signed at its own step. ``verify_capability()``
+checks each link against its own contemporaneous parent rather than
+against the final token's parent. This test inverts post-fix: every
+clean chain at K ∈ {2, 3, 5, 7, 10} should now verify.
 """
 
 from __future__ import annotations
@@ -194,39 +170,71 @@ def test_b3_depth2_parent_cap_id_mutated_rejected(sandbox, tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Depth ≥ 3 FINDING: clean chains rejected by multi-hop verification bug
+# Depth >= 3: clean chains verify post-v0.6 fix (Bug 6 closed, GH #29)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("depth_k", [3, 5, 7, 10])
-def test_b3_finding_clean_chain_rejected_at_depth_ge_3(sandbox, tmp_path, depth_k, capsys):
-    """FINDING: At chain depths K ≥ 3, a CLEAN multi-hop delegation
-    chain is rejected by inline verification.
+def test_b3_clean_chain_accepted_at_depth_ge_3(sandbox, tmp_path, depth_k, capsys):
+    """Clean multi-hop chain at K >= 3 must verify after the v0.6 fix.
 
-    Root cause: src/pact/capability.py:325-335 checks every chain link
-    signature against `token.parent` (final cap's parent), but each
-    link signed a different intermediate cap_id. Only the last link
-    verifies; earlier links fail with "Invalid delegation chain link
-    from <id>".
-
-    This test asserts the empirical (buggy) state. When the bug is
-    fixed in v0.6 (tracked as a separate issue), invert this assertion
-    to require status=ok.
+    Before v0.6, the verifier checked every chain link against
+    ``token.parent`` (final cap's parent) rather than each link's own
+    signed-over parent. Clean chains at K >= 3 were rejected by
+    construction. v0.6 added ``DelegationLink.parent_cap_id`` and
+    routes each link's verification through its own contemporaneous
+    parent. This test exercises the fix.
     """
     alice, last_agent, last_cap = _build_inline_chain(sandbox, tmp_path, depth_k)
     req = _build_req_with_envelope(alice, last_agent, last_cap)
     result = post_message(alice["url"], req.to_dict())
-    fault_code = result.get("fault", {}).get("code")
-    fault_detail = result.get("fault", {}).get("detail", "")
+    fault = result.get("fault", {})
     print(
-        f"\n[B3-K{depth_k}-FINDING] clean chain at K={depth_k} → "
-        f"status={result.get('status')} fault={fault_code} detail={fault_detail[:60]!r}"
+        f"\n[B3-K{depth_k}] clean chain at K={depth_k} → "
+        f"status={result.get('status')} fault={fault.get('code')}"
     )
-    assert result.get("status") == "error", (
-        f"unexpected: K={depth_k} clean chain accepted — the multi-hop "
-        f"verification bug may have been fixed; invert this assertion"
+    assert result.get("status") == "ok", (
+        f"K={depth_k} clean chain rejected after v0.6 fix: "
+        f"fault={fault.get('code')} detail={fault.get('detail', '')[:80]!r}"
     )
-    assert fault_code == "capability_invalid"
-    assert "Invalid delegation chain link" in fault_detail, (
-        f"unexpected rejection reason: {fault_detail}"
+
+
+@pytest.mark.parametrize("depth_k", [3, 5, 7])
+def test_b3_intermediate_signature_forged_rejected_at_depth_ge_3(sandbox, tmp_path, depth_k, capsys):
+    """Tampering with any chain link's signature must invalidate the
+    chain at K >= 3 (post-fix). Demonstrates the verifier still
+    fail-closes on forged chains now that clean chains pass.
+    """
+    alice, last_agent, last_cap = _build_inline_chain(sandbox, tmp_path, depth_k)
+    envelope = last_cap.to_dict()
+    # Mutate the FIRST chain link's signature — the one that would have
+    # been silently rejected pre-fix anyway because of Bug 6. Post-fix,
+    # the rejection reason must be the forged signature, not the bug.
+    envelope["delegation_chain"][0]["sig"] = base64.b64encode(b"\xde\xad\xbe\xef" * 16).decode()
+    req = _build_req_with_envelope(alice, last_agent, last_cap, envelope_override=envelope)
+    result = post_message(alice["url"], req.to_dict())
+    print(
+        f"\n[B3-K{depth_k}-forged] tampered first link → "
+        f"status={result.get('status')} fault={result.get('fault', {}).get('code')}"
     )
+    assert result.get("status") == "error"
+    assert result.get("fault", {}).get("code") == "capability_invalid"
+
+
+@pytest.mark.parametrize("depth_k", [3, 5])
+def test_b3_mutated_parent_cap_id_rejected_at_depth_ge_3(sandbox, tmp_path, depth_k, capsys):
+    """Tampering with ``parent_cap_id`` on any link must invalidate
+    the chain (post-fix, new attack surface created by the new field).
+    """
+    alice, last_agent, last_cap = _build_inline_chain(sandbox, tmp_path, depth_k)
+    envelope = last_cap.to_dict()
+    # Mutate the first link's parent_cap_id to a fresh random value.
+    envelope["delegation_chain"][0]["parent_cap_id"] = str(uuid.uuid4())
+    req = _build_req_with_envelope(alice, last_agent, last_cap, envelope_override=envelope)
+    result = post_message(alice["url"], req.to_dict())
+    print(
+        f"\n[B3-K{depth_k}-pcid-mut] mutated parent_cap_id → "
+        f"status={result.get('status')} fault={result.get('fault', {}).get('code')}"
+    )
+    assert result.get("status") == "error"
+    assert result.get("fault", {}).get("code") == "capability_invalid"

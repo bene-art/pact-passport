@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import uuid
+import warnings
 from datetime import datetime, UTC
 from dataclasses import dataclass, field
 
@@ -42,16 +43,32 @@ class Caveat:
 
 @dataclass
 class DelegationLink:
-    """One link in a delegation chain."""
+    """One link in a delegation chain.
+
+    Each link cryptographically signs the parent cap_id at the moment
+    the link is created. ``parent_cap_id`` (v0.6+) records what the link
+    actually signed at its own attenuation step. Pre-v0.6 chains may
+    omit this field; the verifier falls back to ``token.parent`` for
+    those links (correct only at K=2) with a DeprecationWarning. The
+    fallback is scheduled for removal in v0.7.
+    """
     from_agent: str
     sig: str  # base64-encoded
+    parent_cap_id: str | None = None
 
     def to_dict(self) -> dict:
-        return {"from": self.from_agent, "sig": self.sig}
+        d: dict = {"from": self.from_agent, "sig": self.sig}
+        if self.parent_cap_id is not None:
+            d["parent_cap_id"] = self.parent_cap_id
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> DelegationLink:
-        return cls(from_agent=d["from"], sig=d["sig"])
+        return cls(
+            from_agent=d["from"],
+            sig=d["sig"],
+            parent_cap_id=d.get("parent_cap_id"),
+        )
 
 
 @dataclass
@@ -232,11 +249,18 @@ def attenuate(
 
     # Build delegation chain: inherit parent's chain + add delegator's link
     chain = list(parent.delegation_chain)
-    # Sign the parent cap_id to prove delegator held the parent
+    # Sign the parent cap_id to prove delegator held the parent.
+    # parent_cap_id is recorded on the link so the verifier can check
+    # each link against its own contemporaneous parent (closes Bug 6 /
+    # GH #29 — multi-hop chain verification fails at K >= 3 without
+    # this because the verifier otherwise reaches for token.parent,
+    # the parent of the FINAL token, which only coincides with this
+    # link's signed value at K=2).
     chain_sig = crypto.sign(parent.cap_id.encode(), delegator_private_key)
     chain.append(DelegationLink(
         from_agent=delegator_id,
         sig=base64.b64encode(chain_sig).decode("ascii"),
+        parent_cap_id=parent.cap_id,
     ))
 
     # Combine caveats: parent's + additional (append-only)
@@ -346,8 +370,25 @@ def _verify_capability_inner(
                 )
             link_sig = base64.b64decode(link.sig)
             link_key = known_keys[link.from_agent]
-            # Each link signs the parent cap_id
-            if not crypto.verify(token.parent.encode(), link_sig, link_key):
+            # Each link signs the parent cap_id at its own attenuation
+            # step. v0.6+ records that value as link.parent_cap_id; the
+            # verifier checks each link against its own contemporaneous
+            # parent. Pre-v0.6 chains lack the field; we fall back to
+            # token.parent for backwards compatibility (correct only at
+            # K=2; K>=3 chains in pre-v0.6 format will still be rejected,
+            # which is the existing buggy behavior). Fallback removed
+            # in v0.7. See bug6_fix_design.md.
+            if link.parent_cap_id is not None:
+                signed_value = link.parent_cap_id
+            else:
+                warnings.warn(
+                    "Capability chain link lacks parent_cap_id; "
+                    "pre-v0.6 format, deprecated for removal in v0.7",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                signed_value = token.parent
+            if not crypto.verify(signed_value.encode(), link_sig, link_key):
                 return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
 
     # Check caveats
