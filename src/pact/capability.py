@@ -45,29 +45,52 @@ class Caveat:
 class DelegationLink:
     """One link in a delegation chain.
 
-    Each link cryptographically signs the parent cap_id at the moment
-    the link is created. ``parent_cap_id`` (v0.6+) records what the link
-    actually signed at its own attenuation step. Pre-v0.6 chains may
-    omit this field; the verifier falls back to ``token.parent`` for
-    those links (correct only at K=2) with a DeprecationWarning. The
-    fallback is scheduled for removal in v0.7.
+    Each link cryptographically signs a canonical payload at the moment
+    the link is created. v0.6 (spec v1.2) added ``parent_cap_id`` so
+    the link signs the parent's cap_id and the verifier checks it
+    against each link's own contemporaneous parent (closes Bug 6).
+    v0.7 (spec v1.3) adds ``action_at_step`` and ``caveats_at_step`` so
+    the link's signed payload also binds the *content* of the cap
+    being created — closing Bug 9 (rogue-delegator forgery: a
+    compromised intermediate delegator could otherwise mint children
+    with mutated action or stripped caveats and the v1.2 verifier
+    accepted them). The verifier walks the chain re-deriving the
+    expected (action, caveats) at each hop and rejecting any
+    divergence; mechanism follows Macaroons §III (Birgisson et al.
+    NDSS 2014) ported to PACT's Ed25519 chain.
+
+    Migration: v1.3 verifier accepts pre-v1.3 links (no ``action_at_step``
+    / ``caveats_at_step``) at K=2 with a DeprecationWarning, falling
+    back to v1.2 parent_cap_id-only behavior. v1.4 will reject any
+    chain link lacking the new fields.
     """
     from_agent: str
     sig: str  # base64-encoded
     parent_cap_id: str | None = None
+    action_at_step: str | None = None
+    caveats_at_step: list[Caveat] | None = None
 
     def to_dict(self) -> dict:
         d: dict = {"from": self.from_agent, "sig": self.sig}
         if self.parent_cap_id is not None:
             d["parent_cap_id"] = self.parent_cap_id
+        if self.action_at_step is not None:
+            d["action_at_step"] = self.action_at_step
+        if self.caveats_at_step is not None:
+            d["caveats_at_step"] = [c.to_dict() for c in self.caveats_at_step]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> DelegationLink:
+        caveats_at_step = None
+        if "caveats_at_step" in d:
+            caveats_at_step = [Caveat.from_dict(c) for c in d["caveats_at_step"]]
         return cls(
             from_agent=d["from"],
             sig=d["sig"],
             parent_cap_id=d.get("parent_cap_id"),
+            action_at_step=d.get("action_at_step"),
+            caveats_at_step=caveats_at_step,
         )
 
 
@@ -143,6 +166,22 @@ class CapabilityToken:
     def is_terminal(self) -> bool:
         """Check if any caveat prevents further delegation."""
         return any(c.restrict == "no_further_delegation" and c.terminal for c in self.caveats)
+
+
+def _canonical_caveat_value(value: object) -> object:
+    """Convert a caveat value into a hashable canonical form for set
+    comparison in the v1.3 chain-walk (Bug 9 closure).
+
+    Caveats with structured values (e.g. list / dict payloads) can't be
+    placed into a ``frozenset`` as-is. This helper normalizes lists to
+    tuples and dicts to sorted tuples-of-items so two equivalent caveat
+    values hash the same. Scalar values pass through unchanged.
+    """
+    if isinstance(value, list):
+        return tuple(_canonical_caveat_value(v) for v in value)
+    if isinstance(value, dict):
+        return tuple(sorted((k, _canonical_caveat_value(v)) for k, v in value.items()))
+    return value
 
 
 def _validate_caveats(caveats: list[Caveat]) -> None:
@@ -247,24 +286,32 @@ def attenuate(
                     f"Cannot extend expiry from {parent_exp} to {new_caveat.value}"
                 )
 
-    # Build delegation chain: inherit parent's chain + add delegator's link
+    # Combine caveats: parent's + additional (append-only)
+    all_caveats = list(parent.caveats) + list(additional_caveats)
+
+    # Build delegation chain: inherit parent's chain + add delegator's link.
     chain = list(parent.delegation_chain)
-    # Sign the parent cap_id to prove delegator held the parent.
-    # parent_cap_id is recorded on the link so the verifier can check
-    # each link against its own contemporaneous parent (closes Bug 6 /
-    # GH #29 — multi-hop chain verification fails at K >= 3 without
-    # this because the verifier otherwise reaches for token.parent,
-    # the parent of the FINAL token, which only coincides with this
-    # link's signed value at K=2).
-    chain_sig = crypto.sign(parent.cap_id.encode(), delegator_private_key)
+
+    # v1.3 link payload binds the child's action and caveats into the
+    # signature so a rogue delegator can't mutate them post-attenuate()
+    # without invalidating the chain (closes Bug 9 — see
+    # bug9_fix_design.md). The link records its own (action, caveats)
+    # snapshot so the verifier can walk the chain re-deriving expected
+    # values at each hop. parent_cap_id (v1.2, closes Bug 6) is still
+    # part of the signed payload.
+    link_payload = canonical_json({
+        "parent_cap_id": parent.cap_id,
+        "action_at_step": parent.action,
+        "caveats_at_step": [c.to_dict() for c in all_caveats],
+    })
+    chain_sig = crypto.sign(link_payload, delegator_private_key)
     chain.append(DelegationLink(
         from_agent=delegator_id,
         sig=base64.b64encode(chain_sig).decode("ascii"),
         parent_cap_id=parent.cap_id,
+        action_at_step=parent.action,
+        caveats_at_step=all_caveats,
     ))
-
-    # Combine caveats: parent's + additional (append-only)
-    all_caveats = list(parent.caveats) + list(additional_caveats)
 
     child = CapabilityToken(
         cap_id=str(uuid.uuid4()),
@@ -362,7 +409,20 @@ def _verify_capability_inner(
     if token.delegation_chain and token.parent:
         if not known_keys:
             return CapabilityResult(False, "Cannot verify chain: known_keys not provided")
-        for link in token.delegation_chain:
+
+        # v1.3 (Bug 9 closure): walk the chain re-deriving expected
+        # (action, caveats) at each hop. Track the running state from
+        # the root forward; any divergence is a rogue-delegator
+        # forgery. v1.2 chains (parent_cap_id only) and pre-v1.2
+        # chains (neither) take the legacy verification paths with
+        # DeprecationWarnings.
+        running_action: str | None = None
+        running_caveats: frozenset = frozenset()
+        chain_has_v13_link = False
+        chain_has_pre_v13_link = False
+        chain_has_pre_v12_link = False
+
+        for i, link in enumerate(token.delegation_chain):
             if link.from_agent not in known_keys:
                 return CapabilityResult(
                     False,
@@ -370,26 +430,101 @@ def _verify_capability_inner(
                 )
             link_sig = base64.b64decode(link.sig)
             link_key = known_keys[link.from_agent]
-            # Each link signs the parent cap_id at its own attenuation
-            # step. v0.6+ records that value as link.parent_cap_id; the
-            # verifier checks each link against its own contemporaneous
-            # parent. Pre-v0.6 chains lack the field; we fall back to
-            # token.parent for backwards compatibility (correct only at
-            # K=2; K>=3 chains in pre-v0.6 format will still be rejected,
-            # which is the existing buggy behavior). Fallback removed
-            # in v0.7. See bug6_fix_design.md.
-            if link.parent_cap_id is not None:
-                signed_value = link.parent_cap_id
-            else:
-                warnings.warn(
-                    "Capability chain link lacks parent_cap_id; "
-                    "pre-v0.6 format, deprecated for removal in v0.7",
-                    DeprecationWarning,
-                    stacklevel=2,
+
+            if (
+                link.parent_cap_id is not None
+                and link.action_at_step is not None
+                and link.caveats_at_step is not None
+            ):
+                # v1.3+ link: signature is over the full canonical
+                # payload binding parent_cap_id + action + caveats.
+                chain_has_v13_link = True
+                link_payload = canonical_json({
+                    "parent_cap_id": link.parent_cap_id,
+                    "action_at_step": link.action_at_step,
+                    "caveats_at_step": [c.to_dict() for c in link.caveats_at_step],
+                })
+                if not crypto.verify(link_payload, link_sig, link_key):
+                    return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
+
+                # Action preservation: every link records the same action
+                if running_action is None:
+                    running_action = link.action_at_step
+                elif link.action_at_step != running_action:
+                    return CapabilityResult(
+                        False,
+                        f"Action mutated at chain step {i}: "
+                        f"{running_action!r} -> {link.action_at_step!r}",
+                    )
+
+                # Caveat append-only: cumulative caveat set at this
+                # step MUST be a superset of the previous step's
+                cur_set = frozenset(
+                    (c.restrict, _canonical_caveat_value(c.value))
+                    for c in link.caveats_at_step
                 )
-                signed_value = token.parent
-            if not crypto.verify(signed_value.encode(), link_sig, link_key):
-                return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
+                if not cur_set >= running_caveats:
+                    missing = running_caveats - cur_set
+                    return CapabilityResult(
+                        False,
+                        f"Caveats stripped at chain step {i}: missing {missing}",
+                    )
+                running_caveats = cur_set
+            elif link.parent_cap_id is not None:
+                # v1.2 link: signature is over parent_cap_id only.
+                # Verifier cannot re-derive action / caveats from
+                # this link. v1.3 fallback with DeprecationWarning.
+                chain_has_pre_v13_link = True
+                if not crypto.verify(link.parent_cap_id.encode(), link_sig, link_key):
+                    return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
+            else:
+                # Pre-v1.2 link: no parent_cap_id. Fall back to
+                # token.parent (correct only at K=2). v1.2's existing
+                # legacy path.
+                chain_has_pre_v12_link = True
+                if not crypto.verify(token.parent.encode(), link_sig, link_key):
+                    return CapabilityResult(False, f"Invalid delegation chain link from {link.from_agent}")
+
+        if chain_has_pre_v12_link:
+            warnings.warn(
+                "Capability chain link lacks parent_cap_id; "
+                "pre-v1.2 format, deprecated for removal in v1.4",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if chain_has_pre_v13_link:
+            warnings.warn(
+                "Capability chain link lacks action_at_step / "
+                "caveats_at_step; pre-v1.3 format, deprecated for "
+                "removal in v1.4. Action and caveat re-derivation "
+                "cannot be enforced for this chain.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # v1.3 final-token consistency: if any link in the chain
+        # carries the new fields, the leaf token's (action, caveats)
+        # MUST match the last v1.3 link's recorded values. This is
+        # the check that catches a rogue delegator mutating the
+        # final cap dict after attenuate(): the chain remembers the
+        # legitimate values; the final cap has to match.
+        if chain_has_v13_link and not chain_has_pre_v13_link:
+            if running_action is not None and token.action != running_action:
+                return CapabilityResult(
+                    False,
+                    f"Final cap action mismatches chain: "
+                    f"{token.action!r} != {running_action!r}",
+                )
+            final_caveats = frozenset(
+                (c.restrict, _canonical_caveat_value(c.value))
+                for c in token.caveats
+            )
+            if final_caveats != running_caveats:
+                difference = final_caveats ^ running_caveats
+                return CapabilityResult(
+                    False,
+                    f"Final cap caveats mismatch chain: difference={difference}",
+                )
 
     # Check caveats
     now = datetime.now(UTC)

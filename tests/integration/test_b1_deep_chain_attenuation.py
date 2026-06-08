@@ -202,42 +202,34 @@ def test_b1_attenuate_terminal_cap_rejected(n_hops, capsys):
 
 
 # ---------------------------------------------------------------------------
-# Rogue-delegator forgery — unmasked by the Bug 6 fix (2026-06-08).
+# Rogue-delegator forgery — CLOSED in v0.7 (spec v1.3) per bug9_fix_design.md.
 #
-# Both tests below previously passed *vacuously*. Pre-v0.6, the chain-link
-# verifier checked every link against ``token.parent`` (final cap's parent),
-# so any chain with >= 2 links was structurally rejected — masking the fact
-# that the verifier doesn't re-derive ``action`` or caveats from the chain.
-# With Bug 6 closed (commit `b9bcb3e + 6ab733e + this commit`), the rogue
-# delegator's forgeries now pass chain verification but expose a deeper
-# gap: the verifier trusts ``child.action`` and ``child.caveats`` rather
-# than reconstructing them from the legitimate chain.
-#
-# Filed as Bug 9 (PACT v0.7 issue): verifier must re-derive action and
-# caveats from the delegation chain at verification time, not trust the
-# child's fields. Threat model: a compromised intermediate delegator's
-# private key can mint wider children. Bug class: trust-the-child-field
-# at a layer boundary (sibling to Bug 6's convenient-value substitution).
+# History:
+# 1. Pre-Bug-6 (v0.5.x): both tests below passed vacuously. The chain-link
+#    verifier checked every link against ``token.parent`` (final cap's
+#    parent), so any chain with >= 2 links was structurally rejected,
+#    masking the fact that the verifier didn't re-derive action/caveats.
+# 2. Bug 6 fix (v0.6, commit `34bcc72`): chain links now verify against
+#    each link's own ``parent_cap_id``. Clean K >= 3 chains pass — but
+#    rogue-delegator forgeries (mutated action / stripped caveats) also
+#    pass because the verifier still trusted the child's fields.
+#    Documented as Bug 9 (trust-the-child-field at a layer boundary).
+# 3. Bug 9 fix (v0.7, this commit): DelegationLink gains
+#    ``action_at_step`` and ``caveats_at_step``; ``attenuate()`` signs a
+#    canonical payload binding parent_cap_id + action + caveats;
+#    ``verify_capability()`` walks the chain re-deriving the expected
+#    values at each hop with action-preservation + caveat-append-only
+#    checks. Mechanism follows Macaroons §III (Birgisson et al. NDSS
+#    2014) ported to PACT's Ed25519 chain.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("n_hops", [2, 3, 5, 10])
-def test_b1_finding_rogue_delegator_forges_action(n_hops, capsys):
-    """FINDING (Bug 9, surfaced 2026-06-08 by the Bug 6 fix):
-
-    A rogue intermediate delegator (with their legitimate private key)
-    can mint a child cap with a DIFFERENT action than the legitimate
-    chain authorizes. The verifier accepts it because it trusts the
-    child's ``action`` field rather than re-deriving it from the chain.
-
-    Pre-fix: this attack was masked by Bug 6 — chain-link verification
-    against ``token.parent`` rejected all chains with >= 2 links, so
-    the forged action never had a chance to be inspected.
-
-    Post-fix: chain links verify correctly, the delegator's outer
-    signature on the forged token is valid (they have the key), and
-    the verifier accepts the cap with a forged action. v0.7 fix path:
-    walk the chain, re-derive the legitimate action, reject mismatches.
+def test_b1_rogue_delegator_action_forgery_rejected(n_hops, capsys):
+    """Bug 9 closure: a rogue intermediate delegator (with their
+    legitimate private key) cannot mint a child cap with a DIFFERENT
+    action than the legitimate chain authorizes. v0.7+ verifier walks
+    the chain and rejects on action mismatch with the final-cap check.
     """
     agents, caps, known_keys = _build_chain(n_hops)
     parent = caps[-1]
@@ -256,37 +248,28 @@ def test_b1_finding_rogue_delegator_forges_action(n_hops, capsys):
     )
 
     forged = copy.deepcopy(legit_child)
-    forged.action = "write_doc"  # different from parent's "read_doc"
+    forged.action = "write_doc"
     sig = crypto.sign(canonical_json(forged.signable_dict()), delegator_priv)
     forged.signature = base64.b64encode(sig).decode("ascii")
 
     result = verify_capability(forged, new_holder_id, agents[0][1], known_keys)
     print(
-        f"\n[B1-iv N={n_hops}] FINDING (Bug 9): forged action='write_doc' "
-        f"accepted: valid={result.valid}"
+        f"\n[B1-iv N={n_hops}] rogue action forgery: valid={result.valid} "
+        f"reason={result.reason}"
     )
-    # This documents the empirical state. v0.7 must fail-close on this.
-    assert result.valid, (
-        f"unexpected: rogue-delegator action forgery rejected at K={n_hops}. "
-        f"If Bug 9 has been fixed in v0.7, invert this assertion."
+    assert not result.valid, (
+        f"K={n_hops} rogue-delegator action forgery should be rejected: "
+        f"got valid result {result}"
     )
+    assert "action" in result.reason.lower() or "mismatch" in result.reason.lower()
 
 
 @pytest.mark.parametrize("n_hops", [2, 3, 5, 10])
-def test_b1_finding_rogue_delegator_strips_caveats(n_hops, capsys):
-    """FINDING (Bug 9, surfaced 2026-06-08 by the Bug 6 fix):
-
-    A rogue intermediate delegator (with their legitimate private key)
-    can mint a child cap with ALL caveats stripped, bypassing the
-    append-only rule. The verifier accepts it because it trusts the
-    child's ``caveats`` field rather than re-deriving the legitimate
-    caveat set from the chain.
-
-    Pre-fix: masked by Bug 6 (multi-link chains rejected vacuously).
-    Post-fix: chain links verify; delegator's outer signature on the
-    forged token is valid; verifier accepts the wider cap. v0.7 fix
-    path: walk the chain, accumulate caveats, reject any child whose
-    declared caveats are not a subset of the accumulated set.
+def test_b1_rogue_delegator_caveat_stripping_rejected(n_hops, capsys):
+    """Bug 9 closure: a rogue intermediate delegator cannot strip
+    caveats from a child cap and re-sign it. v0.7+ verifier walks the
+    chain and rejects on the final-cap caveat mismatch (because the
+    chain records what the caveat set MUST be at each step).
     """
     agents, caps, known_keys = _build_chain(n_hops)
     parent = caps[-1]
@@ -305,17 +288,17 @@ def test_b1_finding_rogue_delegator_strips_caveats(n_hops, capsys):
     )
 
     forged = copy.deepcopy(legit_child)
-    forged.caveats = []  # all parent caveats stripped
+    forged.caveats = []
     sig = crypto.sign(canonical_json(forged.signable_dict()), delegator_priv)
     forged.signature = base64.b64encode(sig).decode("ascii")
 
     result = verify_capability(forged, new_holder_id, agents[0][1], known_keys)
     print(
-        f"\n[B1-v N={n_hops}] FINDING (Bug 9): caveat-stripped forge "
-        f"accepted: valid={result.valid}"
+        f"\n[B1-v N={n_hops}] rogue caveat-stripping: valid={result.valid} "
+        f"reason={result.reason}"
     )
-    # This documents the empirical state. v0.7 must fail-close on this.
-    assert result.valid, (
-        f"unexpected: rogue-delegator caveat-stripping rejected at K={n_hops}. "
-        f"If Bug 9 has been fixed in v0.7, invert this assertion."
+    assert not result.valid, (
+        f"K={n_hops} rogue-delegator caveat-stripping should be rejected: "
+        f"got valid result {result}"
     )
+    assert "caveat" in result.reason.lower() or "mismatch" in result.reason.lower()
