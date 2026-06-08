@@ -127,7 +127,14 @@ class PACTHandler(BaseHTTPRequestHandler):
 
         if self.dispatch:
             try:
-                result = self.dispatch(body)
+                # Pass the transport-boundary remote address through so
+                # the V-tier visa policy can derive peer_network_id
+                # (v0.6). Dispatchers that don't take the kwarg fall
+                # back to the legacy single-arg form for compatibility.
+                try:
+                    result = self.dispatch(body, remote_addr=self.client_address)
+                except TypeError:
+                    result = self.dispatch(body)
                 # Streaming path: dispatcher returned an iterator (issue #11).
                 # We write each chunk as one NDJSON line over chunked
                 # transfer encoding. Connection drop mid-stream raises

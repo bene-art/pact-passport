@@ -30,17 +30,32 @@ from pact.transport.client import (
     send_message,
     send_message_streaming,
 )
+from pact.visa import (
+    HandlerCost,
+    VisaContext,
+    VisaGrant,
+    VisaRefuse,
+    derive_peer_network_id,
+    issue_visa,
+    make_default_visa_policy,
+    verify_visa_holder_proof,
+)
 
 __all__ = [
     # Capabilities
     "CapabilityToken",
     "Caveat",
     "HandlerFailure",
+    # V-tier visas (v0.6)
+    "HandlerCost",
     "Identity",
     # Core agent
     "PACTAgent",
     # Messages
     "PACTMessage",
+    "VisaContext",
+    "VisaGrant",
+    "VisaRefuse",
     # Version
     "__version__",
     "attenuate",
@@ -49,8 +64,11 @@ __all__ = [
     "build_res_chunk",
     # Receipts
     "create_receipt",
+    "derive_peer_network_id",
     "fetch_identity",
     "issue_capability",
+    "issue_visa",
+    "make_default_visa_policy",
     # Transport client
     "send_message",
     "send_message_streaming",
@@ -58,4 +76,5 @@ __all__ = [
     "verify_holder_proof",
     "verify_message",
     "verify_receipt",
+    "verify_visa_holder_proof",
 ]

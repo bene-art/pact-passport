@@ -19,6 +19,7 @@ from collections.abc import Callable, Iterator
 from zeroconf import Zeroconf
 
 from pact import crypto
+from pact._canonical import canonical_json
 from pact._chaos import chaos_sleep
 from pact.identity import Identity
 from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability
@@ -33,6 +34,18 @@ from pact.transport.server import PACTServer
 from pact.transport.client import send_message, fetch_identity
 from pact.transport.discovery import (
     register_agent, unregister_agent, discover_agents, resolve_agent,
+)
+from pact.visa import (
+    HandlerCost,
+    VisaContext,
+    VisaGrant,
+    VisaIssuanceTracker,
+    VisaPolicy,
+    VisaRefuse,
+    derive_peer_network_id,
+    issue_visa,
+    make_default_visa_policy,
+    verify_visa_holder_proof,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +64,7 @@ class _DispatchCtx:
     sender_pub: bytes | None = None
     cap_token: CapabilityToken | None = None
     action: str = ""
+    remote_addr: tuple | None = None
 
 
 class PACTAgent:
@@ -76,6 +90,7 @@ class PACTAgent:
         auto_grant: Any = _AUTO_GRANT_UNSET,
         idempotency_cache_max: int = 10_000,
         max_deadline_seconds: int = 3600,
+        visa_policy: VisaPolicy | None = None,
     ):
         self.name = name
         self.capabilities = capabilities or []
@@ -115,6 +130,14 @@ class PACTAgent:
         # idempotency_cache_max constructor arg.
         self._idempotency_cache_max = idempotency_cache_max
         self._task_lock = threading.Lock()
+        # V-tier (v0.6). visa_eligible is opt-in at handler registration
+        # via @agent.handle("...", visa_eligible=True); default is False
+        # (refusal). Pass a custom visa_policy to override the locked
+        # default — useful for tests that exercise specific failure modes.
+        self._visa_eligible_actions: set[str] = set()
+        self._handler_costs: dict[str, HandlerCost] = {}
+        self._visa_tracker = VisaIssuanceTracker()
+        self._custom_visa_policy = visa_policy
 
     def _ensure_identity(self) -> Identity:
         """Load or create the agent's identity."""
@@ -161,15 +184,51 @@ class PACTAgent:
     def _persist_invocation_counts(self) -> None:
         self._store.save_invocation_counts(self.name, self._invocation_counts)
 
-    def handle(self, action: str) -> Callable:
-        """Decorator to register a handler for a capability action."""
+    def handle(
+        self,
+        action: str,
+        visa_eligible: bool = False,
+        cost: HandlerCost | None = None,
+    ) -> Callable:
+        """Decorator to register a handler for a capability action.
+
+        Args:
+            action: The capability action name.
+            visa_eligible: V-tier opt-in. When True, the default visa
+                policy will consider issuing visas for this action to
+                passport-less peers. Default False (fail-closed).
+            cost: Author-honest cost declaration for the default policy's
+                ceiling checks (payload bytes, compute ms, idempotency).
+                Only meaningful when visa_eligible=True.
+        """
         def decorator(fn: Callable) -> Callable:
             self._handlers[action] = fn
+            if visa_eligible:
+                self._visa_eligible_actions.add(action)
+                if cost is not None:
+                    self._handler_costs[action] = cost
             return fn
         return decorator
 
-    def _dispatch(self, body: dict) -> dict:
-        """Handle an incoming PACT message."""
+    @property
+    def _visa_policy(self) -> VisaPolicy:
+        """The active visa policy. Built lazily so handler registration
+        (which mutates _visa_eligible_actions and _handler_costs) is
+        captured at first use, not at construction time.
+        """
+        if self._custom_visa_policy is not None:
+            return self._custom_visa_policy
+        return make_default_visa_policy(self._visa_eligible_actions, self._handler_costs)
+
+    def _dispatch(self, body: dict, remote_addr: tuple | None = None) -> dict:
+        """Handle an incoming PACT message.
+
+        ``remote_addr`` is the transport-boundary client address
+        ``(host, port)``. The V-tier visa policy derives
+        ``peer_network_id`` from it (v0.6); legacy callers that don't
+        pass it get ``None`` and the default policy refuses with
+        ``peer_network_id unobservable``.
+        """
         identity = self._ensure_identity()
 
         msg = PACTMessage.from_dict(body)
@@ -190,9 +249,13 @@ class PACTAgent:
             )
             return res.to_dict()
 
+        # Intent: request_visa (V-tier, v0.6).
+        if msg.intent == "request_visa":
+            return self._handle_visa_request(msg, identity, remote_addr)
+
         # Intent: task
         if msg.intent == "task":
-            return self._handle_task(msg, identity)
+            return self._handle_task(msg, identity, remote_addr)
 
         # Unknown intent
         res = build_res(
@@ -202,13 +265,13 @@ class PACTAgent:
         )
         return res.to_dict()
 
-    def _handle_task(self, msg: PACTMessage, identity: Identity):
+    def _handle_task(self, msg: PACTMessage, identity: Identity, remote_addr: tuple | None = None):
         """Process a task REQ via a pipeline of validators.
 
         Returns either a single dict (one-shot RES) or an iterator of
         dicts (streaming RES_CHUNKs). The HTTP layer routes on type.
         """
-        ctx = _DispatchCtx(msg=msg, identity=identity)
+        ctx = _DispatchCtx(msg=msg, identity=identity, remote_addr=remote_addr)
         with self._task_lock:
             self._ensure_state_loaded()
             for step in (
@@ -222,6 +285,168 @@ class PACTAgent:
                 if result is not None:
                     return result
             return self._step_run_handler(ctx)
+
+    def _handle_visa_request(
+        self,
+        msg: PACTMessage,
+        identity: Identity,
+        remote_addr: tuple | None,
+    ) -> dict:
+        """Process a ``request_visa`` REQ from a passport-less peer.
+
+        The peer presents an ephemeral identity_doc inline (TOFU). We
+        verify it binds to their claimed agent_id, then run the visa
+        policy with a gatekeeper-derived ``peer_network_id``. Grant →
+        mint and return a visa cap with a server-issued nonce. Refuse →
+        opaque ``denied`` to the peer, full rationale recorded only in
+        our receipt. The issuance path is serialized per
+        ``peer_network_id`` so the rate ceiling closes V6 race-free.
+        """
+        ctx = _DispatchCtx(msg=msg, identity=identity, remote_addr=remote_addr)
+
+        # Stranger must present an ephemeral identity_doc inline. The
+        # TOFU path binds it to a fresh agent_id derived from the key.
+        if not msg.identity_doc:
+            return self._dispatch_err(
+                ctx, "visa_no_identity",
+                "request_visa requires an inline identity_doc",
+            )
+        sender_pub = self._resolve_sender_key(msg.from_agent)
+        if sender_pub is None:
+            sender_pub = self._tofu_register(msg.from_agent, msg.identity_doc)
+        if sender_pub is None:
+            return self._dispatch_err(
+                ctx, "visa_invalid_identity",
+                "ephemeral identity_doc does not bind to claimed agent_id",
+            )
+        if not verify_message(msg, sender_pub):
+            return self._dispatch_err(
+                ctx, "visa_invalid_signature",
+                "request_visa signature did not verify under presented identity",
+            )
+        ctx.sender_pub = sender_pub
+
+        requested_action = msg.payload.get("action") if msg.payload else None
+        if not isinstance(requested_action, str) or not requested_action:
+            return self._dispatch_err(
+                ctx, "visa_no_action",
+                "request_visa payload must include {action: <str>}",
+            )
+
+        peer_network_id = derive_peer_network_id(remote_addr)
+        payload_hash = crypto.sha256_digest(canonical_json(msg.payload or {}))
+        ephemeral_fp = crypto.sha256_digest(sender_pub)
+
+        # §4 concurrency note: serialize per peer_network_id so the
+        # rate-ceiling read-modify-write cannot race across threads.
+        peer_lock = self._visa_tracker.lock_for(peer_network_id)
+        with peer_lock:
+            recent_count = self._visa_tracker.recent_count(peer_network_id)
+            vctx = VisaContext(
+                action=requested_action,
+                payload_hash=payload_hash,
+                peer_network_id=peer_network_id,
+                recent_visa_count_window=recent_count,
+                resource_headroom=1.0,
+            )
+            policy_result = self._visa_policy(vctx)
+
+            if isinstance(policy_result, VisaRefuse):
+                return self._build_visa_refusal(
+                    msg, identity, policy_result.reason,
+                    peer_network_id, ephemeral_fp, requested_action,
+                )
+
+            visa = issue_visa(
+                issuer_private_key=identity._private_key,
+                issuer_id=identity.agent_id,
+                holder_id=msg.from_agent,
+                action=requested_action,
+                caveats=policy_result.caveats,
+                ephemeral_key_fingerprint=ephemeral_fp,
+            )
+            self._store.save_capability(self.name, visa.to_dict())
+            self._visa_tracker.record(peer_network_id)
+
+        # Return the visa to the peer. The visa cap dict carries
+        # visa=true + nonce + fingerprint — the peer presents the whole
+        # thing as cap_envelope on the follow-up task REQ.
+        res = build_res(
+            identity._private_key, identity.agent_id, msg,
+            payload={
+                "visa": visa.to_dict(),
+                "nonce": visa.nonce,
+            },
+        )
+        self._store.save_message(self.name, msg.to_dict())
+        self._store.save_message(self.name, res.to_dict())
+        self._store.save_receipt(self.name, create_receipt(
+            identity._private_key, identity.agent_id,
+            task_ref=msg.id, refs=[msg.id, res.id], outcome="completed",
+            extra={
+                "event_type": "visa_grant",
+                "visa_cap_id": visa.cap_id,
+                "ephemeral_key_fingerprint": ephemeral_fp,
+                "action": requested_action,
+                "peer_network_id": peer_network_id,
+                "visa_nonce": visa.nonce,
+                "policy_id": "default_v0_6"
+                             if self._custom_visa_policy is None
+                             else "custom",
+            },
+        ))
+        return res.to_dict()
+
+    def _build_visa_refusal(
+        self,
+        msg: PACTMessage,
+        identity: Identity,
+        reason: str,
+        peer_network_id: str,
+        ephemeral_fp: str,
+        action: str,
+    ) -> dict:
+        """Refused-path: opaque ``denied`` to peer, full rationale only
+        in our receipt (§3 *Refusal posture*)."""
+        res = build_res(
+            identity._private_key, identity.agent_id, msg,
+            status="error",
+            fault={"code": "denied", "detail": "denied"},
+        )
+        self._store.save_message(self.name, msg.to_dict())
+        self._store.save_message(self.name, res.to_dict())
+        self._store.save_receipt(self.name, create_receipt(
+            identity._private_key, identity.agent_id,
+            task_ref=msg.id, refs=[msg.id, res.id], outcome="failed",
+            extra={
+                "event_type": "visa_refused",
+                "ephemeral_key_fingerprint": ephemeral_fp,
+                "action": action,
+                "peer_network_id": peer_network_id,
+                "rationale": reason,
+                "policy_id": "default_v0_6"
+                             if self._custom_visa_policy is None
+                             else "custom",
+            },
+        ))
+        return res.to_dict()
+
+    def _visa_receipt_extra(self, ctx: _DispatchCtx) -> dict:
+        """V3 fidelity: when a visa is in play, every receipt records
+        the audit fields needed to enumerate the compromise window from
+        receipts alone — issuer, visa_cap_id, ephemeral_key_fingerprint,
+        action, signed nonce, timestamp (timestamp is on every receipt
+        already).
+        """
+        if not ctx.cap_token or not ctx.cap_token.visa:
+            return {}
+        return {
+            "event_type": "visa_use",
+            "visa_cap_id": ctx.cap_token.cap_id,
+            "ephemeral_key_fingerprint": ctx.cap_token.ephemeral_key_fingerprint,
+            "action": ctx.cap_token.action,
+            "visa_nonce": ctx.cap_token.nonce,
+        }
 
     # --- Dispatch pipeline steps ---
 
@@ -342,15 +567,25 @@ class PACTAgent:
         if not msg.holder_proof:
             return self._dispatch_err(ctx, "holder_proof_required",
                                       "holder_proof is mandatory when cap_id is present")
-        if not verify_holder_proof(msg, ctx.sender_pub):
-            return self._dispatch_err(ctx, "holder_proof_invalid",
-                                      "Holder proof verification failed")
+        if token.visa:
+            # V-tier (v0.6). On a visa, holder_proof signs the visa's
+            # server-issued nonce instead of msg.id. Closes V5 (nonce
+            # replay across the request-pair).
+            if not token.nonce:
+                return self._dispatch_err(ctx, "visa_invalid", "visa carries no nonce")
+            if not verify_visa_holder_proof(msg.holder_proof, token.nonce, ctx.sender_pub):
+                return self._dispatch_err(ctx, "holder_proof_invalid",
+                                          "Visa holder-proof did not sign visa nonce")
+        else:
+            if not verify_holder_proof(msg, ctx.sender_pub):
+                return self._dispatch_err(ctx, "holder_proof_invalid",
+                                          "Holder proof verification failed")
 
-        # Bind the verified token to ctx BEFORE the rate-limit check so
-        # that a rate-limited refusal still attributes the attempt to
-        # the specific cap in the receipt log (issuer-relevant audit
-        # trail for any rate-limited dispatch — necessary precondition
-        # for the v0.6 V-tier visa receipt-fidelity threshold).
+        # V3 fidelity: bind the verified visa to ctx BEFORE the
+        # rate-limit check so a rate-limited refusal still attributes
+        # the attempt to the compromised visa in receipts. (Without
+        # this, the second visa-use after compromise leaves no
+        # ephemeral_key_fingerprint trail.)
         ctx.cap_token = token
 
         # Rate limit (max_invocations caveat). Read-then-increment is
@@ -408,6 +643,7 @@ class PACTAgent:
         self._store.save_receipt(self.name, create_receipt(
             identity._private_key, identity.agent_id,
             task_ref=msg.id, refs=[msg.id, res.id], outcome="completed",
+            extra=self._visa_receipt_extra(ctx),
         ))
 
         result_dict = res.to_dict()
@@ -485,6 +721,7 @@ class PACTAgent:
             task_ref=msg.id,
             refs=[msg.id] + [c["id"] for c in chunk_dicts],
             outcome=outcome,
+            extra=self._visa_receipt_extra(ctx),
         ))
 
     def _cache_idempotent_response(self, msg: PACTMessage, response) -> None:
@@ -526,10 +763,14 @@ class PACTAgent:
         # even when an earlier dispatch step already wrote the inbound msg.
         self._store.save_message(self.name, ctx.msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
+        extra = self._visa_receipt_extra(ctx)
+        if extra:
+            extra["fault_code"] = code
         self._store.save_receipt(self.name, create_receipt(
             ctx.identity._private_key, ctx.identity.agent_id,
             task_ref=ctx.msg.id, refs=[ctx.msg.id, res.id],
             outcome="failed",
+            extra=extra,
         ))
         return res.to_dict()
 

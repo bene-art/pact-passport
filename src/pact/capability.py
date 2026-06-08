@@ -65,6 +65,13 @@ class CapabilityToken:
     parent: str | None = None  # cap_id of parent token (for attenuated tokens)
     delegation_chain: list[DelegationLink] = field(default_factory=list)
     revoked: bool = False
+    # V-tier (v0.6). When visa=True, this token is a gatekeeper-issued
+    # transit credential for a passport-less peer. holder_proof on use
+    # must sign `nonce` rather than msg.id. ephemeral_key_fingerprint is
+    # recorded for audit; not surfaced on the wire to other parties.
+    visa: bool = False
+    nonce: str | None = None
+    ephemeral_key_fingerprint: str | None = None
     alg: str = crypto.ALG
     signature: str = ""  # base64-encoded
 
@@ -84,6 +91,12 @@ class CapabilityToken:
             d["delegation_chain"] = [dl.to_dict() for dl in self.delegation_chain]
         if self.revoked:
             d["revoked"] = True
+        if self.visa:
+            d["visa"] = True
+        if self.nonce is not None:
+            d["nonce"] = self.nonce
+        if self.ephemeral_key_fingerprint is not None:
+            d["ephemeral_key_fingerprint"] = self.ephemeral_key_fingerprint
         return d
 
     @classmethod
@@ -97,6 +110,9 @@ class CapabilityToken:
             parent=d.get("parent"),
             delegation_chain=[DelegationLink.from_dict(dl) for dl in d.get("delegation_chain", [])],
             revoked=d.get("revoked", False),
+            visa=d.get("visa", False),
+            nonce=d.get("nonce"),
+            ephemeral_key_fingerprint=d.get("ephemeral_key_fingerprint"),
             alg=d.get("alg", crypto.ALG),
             signature=d.get("signature", ""),
         )
