@@ -1,10 +1,10 @@
 # PACT v1 Specification
 
 **Protocol for Agent Capability and Trust**
-Version: 1.2.0-draft
+Version: 1.3.0-draft
 Date: 2026-06-08
 
-> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3 and **supersedes the §1–§11 sections it references**. Section 14 documents the v1.2 additions introduced in reference implementation v0.6 (V-tier visa machinery, per-link `parent_cap_id`, cancelled-receipt emission) and **supersedes/extends §12 where they overlap**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12 *and §14* is. Changelogs in §13 (v1.0→v1.1) and §15 (v1.1→v1.2).
+> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3 and **supersedes the §1–§11 sections it references**. Section 14 documents the v1.2 additions introduced in reference implementation v0.6 (V-tier visa machinery, per-link `parent_cap_id`, cancelled-receipt emission). Section 16 documents the v1.3 chain-walk additions introduced in reference implementation v0.7 (per-link `action_at_step` + `caveats_at_step`, closing Bug 9 rogue-delegator forgery). §14 and §16 **supersede/extend §12 where they overlap**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12, §14, *and §16* is. Changelogs in §13 (v1.0→v1.1), §15 (v1.1→v1.2), and §17 (v1.2→v1.3).
 
 ---
 
@@ -799,15 +799,15 @@ This change closes Bug 6 of the case study: pre-v1.2 verifiers checked every lin
 
 This closes Bug 7 of the case study and aligns the implementation with the v1.1 spec text.
 
-### 14.10 Known limitation: rogue-delegator forgery (Bug 9, deferred to v1.3)
+### 14.10 Known limitation: rogue-delegator forgery (Bug 9, ~~deferred to v1.3~~ **closed in v1.3**)
 
 A capability verifier in v1.2 trusts the values of `action` and `caveats` written into the child cap dict, rather than re-deriving them from the legitimate chain. A delegator whose private key has been compromised can construct a child cap with a different `action` or with caveats stripped, re-sign it with the compromised key, and the v1.2 verifier accepts it (because every chain link still verifies against its stable `parent_cap_id` and the outer signature is valid).
 
 **Threat model.** This vulnerability requires compromise of an intermediate delegator's private key. With that compromise, the attacker can mint arbitrary children — including children with widened authority — beneath the compromised delegator's position in the chain. Damage is bounded to caps downstream of the compromised key; the original issuer and any siblings are unaffected.
 
-**Status in v1.2.** Known and deferred. v1.3 verifiers SHOULD walk the delegation chain to accumulate the legitimate `action` and caveat set from each link, rejecting children whose declared values diverge. The wire shape that supports this may require chain links to also commit to the child's cap_id (or to the accumulated caveat set); the trade-off is open as of 2026-06-08.
+**Closure in v1.3 (see §16.1).** Per-link `action_at_step` + `caveats_at_step` fields bind the child's content into the link's signature. The verifier walks the delegation chain re-deriving the expected `(action, caveats)` at each hop with action-preservation and caveat-append-only checks; the final token's content MUST match the last link's recorded values. Mechanism follows Macaroons §III (Birgisson et al. NDSS 2014) ported to PACT's Ed25519 chain. Reference v0.7 implements this; pre-v1.3 chains fall back to v1.2 behavior with a `DeprecationWarning` and v1.4 will require the new fields.
 
-**Implementations.** v1.2 implementations MAY add this check as an optional verifier mode; doing so does not break v1.2 compliance.
+**Implementations.** v1.2 implementations MAY add the v1.3 check as an optional verifier mode; doing so does not break v1.2 compliance but is recommended where supply-chain-of-keys is part of the threat model.
 
 ---
 
@@ -831,3 +831,72 @@ Line-item summary for implementers tracking the diff. Each row points to the §1
 **Versioning policy continued.** v1.1 → v1.2 indicates additive amendments (the V-tier visa mechanism) and tightening fixes (Bug 6 + Bug 7 + Bug 8). v1.2 verifiers accept caps in either v1.1 or v1.2 chain-link format; v1.3 will drop the v1.1 fallback. **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`. The V-tier surface (§14.1–§14.7) and the Bug 6 chain-link tightening (§14.8) are the new conformance requirements for v1.2.
 
 **Test vectors.** `tests/vectors/pact_v1_vectors.json` is current as of v1.1.0-draft. A v1.2 vector update covering visa caps + per-link `parent_cap_id` is pending; the reference implementation's full test suite (`tests/`) exercises the v1.2 paths in the meantime.
+
+---
+
+## 16. v1.3 amendments (extend §14; closes Bug 9)
+
+Section 16 is normative for v1.3 and is tracked by reference implementation **v0.7**. Where §16.x conflicts with §14.x, §16.x is authoritative. §16 closes Bug 9 (rogue-delegator forgery, §14.10) by binding the child's `action` and `caveats` into each delegation-link signature and having the verifier walk the chain re-deriving the expected values at each hop.
+
+### 16.1 `DelegationLink` extension (§14.8 update — Bug 9 closure)
+
+Each `DelegationLink` minted under v1.3 MUST carry two additional fields:
+
+| Field | Type | Required from | Purpose |
+|---|---|---|---|
+| `action_at_step` | string | v1.3+ | The action of the cap created at this attenuation step |
+| `caveats_at_step` | array of caveats | v1.3+ | The full caveat list of the cap created at this attenuation step |
+
+The link's signature MUST be over a canonical JSON encoding of the payload:
+
+```
+{
+  "parent_cap_id":   "<uuid>",
+  "action_at_step":  "<action>",
+  "caveats_at_step": [ { "restrict": "...", "value": ... }, ... ]
+}
+```
+
+This binds the child's content into the link's signature. A rogue delegator who mutates `action` or strips `caveats` post-attenuate() cannot re-sign the chain link without producing a payload whose hash diverges from the chain-walk's reconstruction.
+
+### 16.2 Chain verification — `action` + caveat re-derivation
+
+The v1.3 verifier walks the delegation chain enforcing two invariants in addition to the v1.2 link signature checks:
+
+1. **Action preservation.** Every link's `action_at_step` MUST equal every other link's `action_at_step`. Action is constant across the chain (caps preserve action through attenuation; attenuation narrows scope, not changes purpose).
+2. **Caveat append-only.** Each link's `caveats_at_step` MUST be a superset of the previous link's `caveats_at_step` (as a multiset of `(restrict, value)` tuples, with structured values canonicalized).
+
+After walking the chain, the verifier MUST check that the final token's `action` matches the last link's `action_at_step` and the final token's `caveats` matches the last link's `caveats_at_step`. Either mismatch indicates the leaf was mutated after legitimate attenuation.
+
+Rejection reasons MUST be reported with sufficient context for debugging (chain index, expected vs. actual values).
+
+### 16.3 Pre-v1.3 migration window
+
+A v1.3 verifier MAY accept a chain link lacking `action_at_step` or `caveats_at_step` by falling back to v1.2 behavior (the v1.2 `parent_cap_id` check, §14.8). When it does so, it MUST emit a `DeprecationWarning` indicating pre-v1.3 chain format and noting that action/caveat re-derivation cannot be enforced for that link. **v1.4 verifiers MUST reject any chain link lacking the v1.3 fields.**
+
+### 16.4 Threat-model boundary
+
+§16.1–§16.3 close Bug 9 — the rogue-delegator forgery surface. They do NOT extend protection against:
+
+* **A compromised root issuer.** A root key compromise lets the attacker mint arbitrary caps directly; chain re-derivation provides no defense. Issuer key rotation (§4) is the only mitigation.
+* **A leaf-holder colluding with their delegator.** If both keys are compromised, the chain is by-design valid; PACT cannot distinguish legitimate from collusive attenuation.
+* **Authoritative-time skew.** Caveat enforcement is the verifier's responsibility (§5.4); chain walk doesn't affect time-based caveats.
+
+These boundaries are deliberate; v1.3 closes the rogue-delegator surface specifically.
+
+---
+
+## 17. Changes from v1.2.0-draft to v1.3.0-draft
+
+Line-item summary for implementers tracking the diff. Each row points to the §16 sub-section that defines the change normatively.
+
+| § | Change | Wire-affecting? | Reference impl version |
+|---|---|---|---|
+| §16.1 | `DelegationLink` gains required-from-v1.3 `action_at_step` + `caveats_at_step` fields; link signature is over the canonical-JSON payload binding `parent_cap_id` + `action_at_step` + `caveats_at_step` | Yes (new fields, signature semantics tightened) | v0.7 |
+| §16.2 | Chain verifier walks the delegation chain enforcing action preservation + caveat append-only; final token's `(action, caveats)` MUST match the last link's recorded values (closes Bug 9 — §14.10) | Yes (audit-trail tightening; new fault paths) | v0.7 |
+| §16.3 | Pre-v1.3 chains lacking the new fields verify with `DeprecationWarning` (v1.2 fallback path); v1.4 will reject pre-v1.3 chains | Yes (migration window) | v0.7 |
+| §16.4 | Threat-model boundaries: §16 closes rogue-delegator forgery only; root-key compromise, leaf-delegator collusion, and time-skew are out of scope for the chain-walk mechanism | Clarification (no behavior change) | v0.7 |
+
+**Versioning policy continued.** v1.2 → v1.3 indicates additive tightening (the per-link content binding + chain-walk re-derivation) and a known-limitation closure (Bug 9). v1.3 verifiers accept caps in v1.1, v1.2, or v1.3 chain-link format with a deprecation cascade; v1.4 drops the v1.1 + v1.2 fallbacks. The substrate now has zero known unfixed correctness gaps documented in the case study (Bugs 1–9 all closed at the reference-implementation level). **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`.
+
+**Test vectors.** A v1.3 vector update covering chain-walk re-derivation is pending; the reference implementation's full test suite exercises the v1.3 paths in the meantime.
