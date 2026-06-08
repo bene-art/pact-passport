@@ -37,6 +37,7 @@ from pact.transport.discovery import (
 )
 from pact.visa import (
     HandlerCost,
+    ProtocolAdvertisement,
     VisaContext,
     VisaGrant,
     VisaIssuanceTracker,
@@ -91,6 +92,7 @@ class PACTAgent:
         idempotency_cache_max: int = 10_000,
         max_deadline_seconds: int = 3600,
         visa_policy: VisaPolicy | None = None,
+        advertise_protocol: ProtocolAdvertisement | None = None,
     ):
         self.name = name
         self.capabilities = capabilities or []
@@ -138,6 +140,12 @@ class PACTAgent:
         self._handler_costs: dict[str, HandlerCost] = {}
         self._visa_tracker = VisaIssuanceTracker()
         self._custom_visa_policy = visa_policy
+        # v1.3 / spec §16.5 — passive protocol advertisement. Default
+        # None (absent on the wire); when set, the agent emits the
+        # advertisement on visa-grant and structured-refusal
+        # responses. The field is normatively inert on receive
+        # (MUST-NOT consumed); no code path acts on a received value.
+        self.advertise_protocol = advertise_protocol
 
     def _ensure_identity(self) -> Identity:
         """Load or create the agent's identity."""
@@ -355,6 +363,7 @@ class PACTAgent:
                 return self._build_visa_refusal(
                     msg, identity, policy_result.reason,
                     peer_network_id, ephemeral_fp, requested_action,
+                    advertisement_override=policy_result.protocol_advertisement,
                 )
 
             visa = issue_visa(
@@ -371,12 +380,21 @@ class PACTAgent:
         # Return the visa to the peer. The visa cap dict carries
         # visa=true + nonce + fingerprint — the peer presents the whole
         # thing as cap_envelope on the follow-up task REQ.
+        grant_payload: dict = {
+            "visa": visa.to_dict(),
+            "nonce": visa.nonce,
+        }
+        # v1.3 / spec §16.5 — emit passive protocol advertisement when
+        # configured. Per-decision override (policy_result.protocol_advertisement)
+        # takes precedence over the agent default (self.advertise_protocol).
+        # The field is signed by build_res (MITM tampering breaks
+        # verification) and normatively inert on receive.
+        advertisement = policy_result.protocol_advertisement or self.advertise_protocol
+        if advertisement is not None:
+            grant_payload["protocol_advertisement"] = advertisement.to_dict()
         res = build_res(
             identity._private_key, identity.agent_id, msg,
-            payload={
-                "visa": visa.to_dict(),
-                "nonce": visa.nonce,
-            },
+            payload=grant_payload,
         )
         self._store.save_message(self.name, msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
@@ -405,11 +423,26 @@ class PACTAgent:
         peer_network_id: str,
         ephemeral_fp: str,
         action: str,
+        advertisement_override: ProtocolAdvertisement | None = None,
     ) -> dict:
         """Refused-path: opaque ``denied`` to peer, full rationale only
-        in our receipt (§3 *Refusal posture*)."""
+        in our receipt (§3 *Refusal posture*).
+
+        Optionally carries a passive ``protocol_advertisement`` (v1.3 /
+        spec §16.5) in the refusal payload. The fault itself stays
+        opaque (``denied``); the advertisement leaks one thing — that
+        the gatekeeper speaks PACT — which is orthogonal to the policy
+        rationale that the refusal continues to hide.
+        """
+        # v1.3 / spec §16.5 — per-decision override (from VisaRefuse)
+        # takes precedence over the agent default.
+        advertisement = advertisement_override or self.advertise_protocol
+        refusal_payload: dict | None = None
+        if advertisement is not None:
+            refusal_payload = {"protocol_advertisement": advertisement.to_dict()}
         res = build_res(
             identity._private_key, identity.agent_id, msg,
+            payload=refusal_payload,
             status="error",
             fault={"code": "denied", "detail": "denied"},
         )

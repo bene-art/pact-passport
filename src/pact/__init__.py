@@ -32,6 +32,7 @@ from pact.transport.client import (
 )
 from pact.visa import (
     HandlerCost,
+    ProtocolAdvertisement,
     VisaContext,
     VisaGrant,
     VisaRefuse,
@@ -53,6 +54,7 @@ __all__ = [
     "PACTAgent",
     # Messages
     "PACTMessage",
+    "ProtocolAdvertisement",
     "VisaContext",
     "VisaGrant",
     "VisaRefuse",

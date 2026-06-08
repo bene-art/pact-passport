@@ -63,16 +63,59 @@ class VisaContext:
     resource_headroom: float = 1.0
 
 
+@dataclass(frozen=True)
+class ProtocolAdvertisement:
+    """Passive, signed protocol-advertisement metadata (v1.3 / spec §16.5).
+
+    Emit-only. PACT MUST NOT take automated action on a received
+    ``protocol_advertisement`` field. See spec §16.5 and
+    ``visa_protocol_advertisement_design.md``. The field is the
+    smallest possible substrate-discovery primitive: it identifies
+    the protocol and points to its spec, with the decision to act on
+    that information left entirely out-of-band (to a developer
+    reading the spec and writing code).
+
+    Two strings. Flat. No nested structures, no lists. The flatness
+    is deliberate — it removes any temptation toward parsing logic.
+    """
+    protocol: str
+    spec_uri: str
+
+    def to_dict(self) -> dict:
+        return {"protocol": self.protocol, "spec_uri": self.spec_uri}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ProtocolAdvertisement":
+        return cls(protocol=d["protocol"], spec_uri=d["spec_uri"])
+
+
 @dataclass
 class VisaGrant:
-    """Policy result: issue a visa with these caveats."""
+    """Policy result: issue a visa with these caveats.
+
+    Optionally carries a passive ``protocol_advertisement`` (v1.3 /
+    spec §16.5). When set, the wire response payload includes the
+    advertisement under the outer signature so MITM tampering breaks
+    verification. The field is normatively inert on receive (MUST-NOT
+    consumed); see the design doc.
+    """
     caveats: list[Caveat] = field(default_factory=list)
+    protocol_advertisement: ProtocolAdvertisement | None = None
 
 
 @dataclass
 class VisaRefuse:
-    """Policy result: refuse. ``reason`` is audit-internal, not returned to peer."""
+    """Policy result: refuse. ``reason`` is audit-internal, not returned to peer.
+
+    Optionally carries a passive ``protocol_advertisement`` (v1.3 /
+    spec §16.5). When set, the refusal response payload includes the
+    advertisement under the outer signature. The refusal itself
+    remains opaque (``denied``); the advertisement leaks one thing —
+    that the gatekeeper speaks PACT — orthogonal to the policy
+    rationale that the refusal continues to hide.
+    """
     reason: str
+    protocol_advertisement: ProtocolAdvertisement | None = None
 
 
 VisaPolicy = Callable[[VisaContext], "VisaGrant | VisaRefuse"]

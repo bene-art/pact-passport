@@ -809,6 +809,35 @@ A capability verifier in v1.2 trusts the values of `action` and `caveats` writte
 
 **Implementations.** v1.2 implementations MAY add the v1.3 check as an optional verifier mode; doing so does not break v1.2 compliance but is recommended where supply-chain-of-keys is part of the threat model.
 
+### 16.5 V-tier protocol advertisement (passive, emit-only)
+
+A gatekeeper agent MAY attach an optional `protocol_advertisement` field to the payload of a visa-grant response or a structured-refusal response. The field consists of exactly two strings: `protocol` (e.g. `"PACT/1.3"`) and `spec_uri` (a URI where the spec is published).
+
+```
+"protocol_advertisement": {
+  "protocol": "PACT/1.3",
+  "spec_uri": "<URI of the spec>"
+}
+```
+
+The field is signed by the outer `build_res` signature; MITM tampering breaks verification. The advertisement is conditionally included on the wire only when configured at the issuing agent (agent-level `advertise_protocol` knob) or specified per-decision by the issuance policy (`VisaGrant.protocol_advertisement` / `VisaRefuse.protocol_advertisement`). Absence is the norm; presence does not affect any other field's semantics.
+
+**MUST-NOT.** Implementations MUST NOT take automated action on a received `protocol_advertisement` field. The field is emit-only metadata for human-mediated discovery — a developer building a non-PACT counterparty may read it out-of-band, follow the `spec_uri` to the published spec, and decide whether to add PACT support to their stack. It is NOT a handshake, NOT an install instruction, NOT a substrate-bootstrap mechanism. Any code path that consumes, parses-for-action, or acts on a received advertisement violates v1.3 conformance.
+
+**Specific consumption paths that are forbidden:**
+
+- No outbound network call on parse. Deserializing a message containing the field MUST NOT trigger a fetch of `spec_uri`.
+- No protocol-level logging that surfaces the advertisement specially. Application code that reads the field manually is fine; PACT's own logger MUST NOT call it out.
+- No telemetry, metrics, or counters about advertisements seen.
+- No convenience methods that act on the field (no `grant.follow_advertisement()`, no auto-fetch).
+- No dispatch-decision branch keyed off a received advertisement.
+
+**Future PACT versions MUST preserve this MUST-NOT.** The advertisement is permanent emit-only metadata; making it actionable in a later spec revision would constitute a security-model break. Adoption is a human deliberation, not an automated agent decision — see §6 future work on the deferred outbound-presentation direction. The MUST-NOT is the architectural enforcement of the distinction the V-tier already makes between *PACT advertising what it speaks* (passive, safe) and *PACT propagating itself* (active, threat-bearing, explicitly out of scope).
+
+**Refusal-posture interaction (§3 *Refusal posture*).** The structured-refusal response's `fault` remains opaque (`"code": "denied"`); the optional advertisement leaks one thing — that the gatekeeper speaks PACT — which is intentional and orthogonal to the policy rationale that the refusal continues to hide.
+
+**Receipts.** The advertisement is NOT recorded in receipts. Receipts are the audit primitive (§7) and remain inert with respect to advertisement fields; actionable content in the audit log corrupts the audit primitive and re-opens the consumption-injection surface that §16.5 exists to prevent.
+
 ---
 
 ## 15. Changes from v1.1.0-draft to v1.2.0-draft
@@ -896,7 +925,8 @@ Line-item summary for implementers tracking the diff. Each row points to the §1
 | §16.2 | Chain verifier walks the delegation chain enforcing action preservation + caveat append-only; final token's `(action, caveats)` MUST match the last link's recorded values (closes Bug 9 — §14.10) | Yes (audit-trail tightening; new fault paths) | v0.7 |
 | §16.3 | Pre-v1.3 chains lacking the new fields verify with `DeprecationWarning` (v1.2 fallback path); v1.4 will reject pre-v1.3 chains | Yes (migration window) | v0.7 |
 | §16.4 | Threat-model boundaries: §16 closes rogue-delegator forgery only; root-key compromise, leaf-delegator collusion, and time-skew are out of scope for the chain-walk mechanism | Clarification (no behavior change) | v0.7 |
+| §16.5 | V-tier optional `protocol_advertisement` field on visa-grant and structured-refusal payloads; signed by outer envelope; normatively inert (MUST-NOT on consumption); MUST be preserved as emit-only in all future versions | Yes (additive optional field on existing wire envelopes) | v0.7 |
 
-**Versioning policy continued.** v1.2 → v1.3 indicates additive tightening (the per-link content binding + chain-walk re-derivation) and a known-limitation closure (Bug 9). v1.3 verifiers accept caps in v1.1, v1.2, or v1.3 chain-link format with a deprecation cascade; v1.4 drops the v1.1 + v1.2 fallbacks. The substrate now has zero known unfixed correctness gaps documented in the case study (Bugs 1–9 all closed at the reference-implementation level). **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`.
+**Versioning policy continued.** v1.2 → v1.3 indicates additive tightening (the per-link content binding + chain-walk re-derivation), a known-limitation closure (Bug 9), and one additive V-tier extension (the passive protocol-advertisement field, §16.5). v1.3 verifiers accept caps in v1.1, v1.2, or v1.3 chain-link format with a deprecation cascade; v1.4 drops the v1.1 + v1.2 fallbacks. The substrate now has zero known unfixed correctness gaps documented in the case study (Bugs 1–9 all closed at the reference-implementation level). The §16.5 MUST-NOT on advertisement consumption MUST be preserved in all future versions; relaxing it would constitute a security-model break. **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`.
 
 **Test vectors.** A v1.3 vector update covering chain-walk re-derivation is pending; the reference implementation's full test suite exercises the v1.3 paths in the meantime.
