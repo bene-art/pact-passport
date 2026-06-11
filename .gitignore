@@ -12,3 +12,10 @@ venv/
 htmlcov/
 *.so
 .env
+
+# Generated document artifacts (source of truth is the .md)
+docs/*.pdf
+docs/*.html
+
+# Stage 2 harness run outputs
+tests/stage2/results_*/
