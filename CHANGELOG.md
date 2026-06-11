@@ -5,39 +5,47 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.5] — 2026-06-05
+## [0.6.0] — 2026-06-11
 
-Source-tree polish + one user-facing bug fix. No wire changes.
-
-### Fixed
-- Three `ImportError` messages previously told users to run `pip install pact-protocol[cbor|fast|lak]` when triggered — that package name is squatted by another publisher on PyPI, so the suggested command failed. Updated to `pact-passport[cbor|fast|lak]` to match the actual package name (renamed 2026-05-01). Affects `_canonical.py:39`, `_canonical.py:53`, `transport/async_server.py:202`.
-- Five docstrings referencing the old `pact-protocol` install command also updated for consistency: `_canonical.py:33`, `_canonical.py:47`, `transport/async_server.py:4`, `transport/async_server.py:172`, `contrib/lak_channel.py:16`.
-- `tests/vectors/generate_vectors.py` and the generated `tests/vectors/pact_v1_vectors.json` carried `"generated_by": "pact-protocol reference implementation"`. Updated to `pact-passport reference implementation` for public test-vector consistency.
+Two bug fixes for issues surfaced by C-tier cluster testing (#29, #30), one rate-limit binding fix (Bug 8), one capability-chain correctness fix (Bug 9), the V-tier visa machinery, and an emit-only `protocol_advertisement` field. Spec moves v1.1.0-draft → v1.3.0-draft. **Wire changes — see "Breaking changes" below.**
 
 ### Added
-- `CHANGELOG.md` (this file), `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/PULL_REQUEST_TEMPLATE.md`.
-- `tests/test_cli.py`: 14 CLI smoke tests covering `init`, `identity`, `caps`, `grant`, `revoke`, `receipts`, `peers`, `doctor`, and the auto-resolve-single-agent path. Uses `PACT_HOME` env redirect for store isolation.
-- `tests/integration/test_agent_ask.py`: 3 end-to-end tests exercising `PACTAgent.ask()` (the high-level client API that was completely uncovered). Happy path with capability, unknown target, failed-receipt-on-error.
+
+- **V-tier visa machinery** (`src/pact/visa.py`). Three-tier trust gradient (passport → visa → refusal) above the v0.5 capability layer. `PACTAgent(visa_policy=...)` accepts a policy hook; default policy ships an opt-in `visa_eligible` predicate with idempotent-action allowlist, ≤4KB / ≤100ms / ≤5-per-60s-per-peer caps, and per-peer serialization to close V6 amplification races. Verified by V1–V7 adversarial battery (7/7 green, `tests/integration/test_v_tier_v1_v7.py`).
+- **`ProtocolAdvertisement` field on visa-grant + visa-refusal payloads.** Optional, signed via the existing response signature, **emit-only by architectural mandate**: PACT contains no code path that consumes, parses-for-action, fetches, logs, or branches on a received advertisement. Spec §16.5 enforces the MUST-NOT; test 6.4 (`tests/integration/test_v_tier_protocol_advertisement.py`) is the load-bearing no-consumption proof. Constructor knob: `PACTAgent(advertise_protocol=ProtocolAdvertisement(...))`; per-decision override via `VisaGrant.protocol_advertisement` / `VisaRefuse.protocol_advertisement`.
+- **Stage 2 adversarial probe harness** (`tests/stage2/`): 25 pre-registered probes across A/C/L/M/P/R/S/V tiers (~3.4K LOC). Each probe self-describes via `@probe` decorator (pairing, prediction, failure threshold, citation) and writes one JSON to a timestamped results dir. Loopback smoke: 24/33 sub-probes green; remaining 9 documented `new_finding` pending cross-machine NUC-bridge runs.
+- 14 CLI smoke tests (`tests/test_cli.py`) covering `init`, `identity`, `caps`, `grant`, `revoke`, `receipts`, `peers`, `doctor`. 3 `PACTAgent.ask()` integration tests (`tests/integration/test_agent_ask.py`) — happy path, unknown target, failed-receipt-on-error.
+- `CHANGELOG.md`, `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.{md,yml}`, `.github/PULL_REQUEST_TEMPLATE.md`.
+
+### Fixed
+
+- **#29 — multi-hop delegation chains (K≥3) fail verification (Bug 6).** `verify_capability` now checks each `DelegationLink` against its own contemporaneous `parent_cap_id` instead of the final token's parent. Chains of any depth verify; v0.5.x verifiers rejected K≥3 chains spuriously. Wire change — see Breaking changes.
+- **#30 — stream partition skipped server-side receipt write (Bug 7).** `_run_streaming_handler` restructured to `try/finally` with an `outcome` state variable defaulting to `"cancelled"`. `GeneratorExit` (raised on `BrokenPipeError`) no longer bypasses receipt persistence. §3.5 unilateral-receipt claim now actually holds for streaming; §12.9's `outcome="cancelled"` is now emitted (previously specified but never written).
+- **Bug 8 — `ctx.cap_token` unbound during rate-limit refusals.** Dispatch binds the verified visa onto the context *before* rate-limit refusal so receipts under visa carry the correct `visa_cap_id` even on the refusal path.
+- **Bug 9 — rogue-delegator forgery accepted by chain verifier.** `attenuate()` signs the link over `canonical_json({parent_cap_id, action_at_step, caveats_at_step})`; `verify_capability` walks the chain enforcing (1) action preservation, (2) caveat append-only, (3) final-token consistency. Macaroons-style chain re-derivation ported to Ed25519. Surfaced 2026-06-08 when the Bug 6 fix unmasked prior B1 vacuous rejections. All Bugs 1–9 from the v0.1 case-study battery are now closed at the reference-implementation level; cross-machine validation pending Stage 2 runs.
+- Three `ImportError` messages told users to `pip install pact-protocol[...]` — a squatted name on PyPI. Updated to `pact-passport[...]` across `_canonical.py` and `transport/async_server.py`. Five docstrings + test-vector generator metadata updated for the same rename.
 
 ### Changed
-- `spec/PACT_v1.md` revised to `v1.1.0-draft` (2026-06-05). The §12 addendum sections already documented every wire-affecting change from v0.2.0 through v0.5.3, but supersession over §1–§11 was conversational rather than normative. v1.1 rewrites the §12 preamble to make supersession explicit, adds inline pointers (`→ §12.x`) in the affected §1–§11 sections so top-down readers cannot miss the amendments, expands the §10 conformance checklist from 6 items to 10, and adds new §13 = line-item change summary + versioning policy. Draft status (`-draft`) retained until external validation per HotNets paper §6. **No wire changes.**
-- Ruff lint pass on `src/pact/`: 56 findings closed (51 auto-fixed + 5 manual).
-  - `UP035`: Moved `Callable` / `Iterator` from `typing` to `collections.abc` (5 files).
-  - `UP037`: Removed redundant quoted type annotations.
-  - `UP041`: Replaced `socket.timeout` alias with builtin `TimeoutError` (`transport/server.py`).
-  - `UP017`: Used `datetime.UTC` alias.
-  - `SIM108` / `SIM105`: Replaced if/else blocks with ternaries; replaced try/except/pass with `contextlib.suppress`.
-  - `RUF022`: Sorted `__all__` in `pact/__init__.py`.
-  - `F401`: Removed unused `CBOR_CONTENT_TYPE` import in `transport/client.py` (CBOR client send path is not yet wired through; tracked as issue #27 for v0.6).
-  - `B904`: Three places now use `raise ImportError(...) from None` to suppress the noisy `ModuleNotFoundError` chain on missing optional deps; one place uses `raise ValueError(...) from e` to preserve original parse-failure detail in caveat validation.
-  - `RUF002`: Replaced ambiguous Unicode `×` with `x` in `contrib/lak_channel.py:25` docstring.
 
-### Deferred
-- Client-side CBOR request encoding (asymmetry with server) — tracked as GitHub issue #27 for v0.6.
-- The full v0.6 backlog is now visible as GitHub issues #22 (trusted_issuers), #23 (app-level caveat enforcement), #24 (cross-machine revocation propagation), #25 (post-quantum signatures), #26 (per-token cost accounting), #27 (client-side CBOR).
+- **Spec bumped: v1.1.0-draft → v1.2.0-draft → v1.3.0-draft.** v1.2 adds §14 (three-tier trust gradient, visa REQ/RES shape, holder-proof binds visa nonce, default issuance policy, Bug 6/7/8 normative codification, Bug 9 acknowledged-but-deferred) + §15 changelog. v1.3 adds §16 (chain re-derivation, action/caveat preservation, pre-v1.3 fallback with `DeprecationWarning`, threat-model boundaries) + §16.5 `protocol_advertisement` MUST-NOT + §17 changelog. v1.3 verifier closes Bug 9 normatively. Spec length: 684 → ~990 lines.
+- Ruff lint pass on `src/pact/`: 56 findings closed (51 auto-fixed + 5 manual). UP035 (`Callable`/`Iterator` → `collections.abc`), UP041 (`socket.timeout` → `TimeoutError`), UP017 (`datetime.UTC`), SIM108/SIM105, RUF022, F401 (unused `CBOR_CONTENT_TYPE` — CBOR client path tracked as #27), B904 (`from None` on optional-dep `ImportError`), RUF002 (`×` → `x` in `lak_channel.py`).
+
+### Breaking changes
+
+- **Pre-v1.3 delegation chains verify with `DeprecationWarning` only at K=2.** v1.3 chains verify natively at any depth. v1.4 will drop pre-v1.3 chain support. Re-issue long-lived multi-hop capabilities before v1.4.
+- **`cancelled` receipt outcome now emits on stream partition.** Downstream code that assumed streaming receipts were only `{completed, failed}` must add a `cancelled` branch.
+
+### Deferred (visible as GitHub issues)
+
+#22 `trusted_issuers` (cross-org capability chains), #23 application-level caveat enforcement, #24 cross-machine revocation propagation, #25 post-quantum signatures, #26 per-token cost accounting, #27 client-side CBOR.
 
 ### Tests
-- 164 → 181. Project-wide coverage 64% → 74%. `cli.py` 0% → 41%. `agent.py` 77% → 83%.
+
+281 collected, 281 passed locally (macOS). Linux + Windows pending CI on push. Coverage 64% → 74%. Stage 2 probe harness (25 probes) runs standalone, not under `pytest`.
+
+### Release cadence
+
+HotNets paper deadline 2026-07-16. Subsequent releases will continue shipping fixes and Stage 2 probe results as the cross-machine experiments complete. This release reflects local-loopback validation; cross-machine empirical results follow.
 
 ## [0.5.4] — 2026-06-05
 

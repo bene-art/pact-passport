@@ -9,7 +9,7 @@
 
 Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Three message types — REQ, RES, RES_CHUNK. Everything else is built at the edges.
 
-> **Status:** v0.5.3 — feature-complete for v0.x scope. All actionable issues from the v0.1 case study are closed (auth-bypass triangle #2/#3/#8, durability #5, rotation refresh #4, wire-level delegation #10, streaming #11, DoS hardening #9, Windows compat #6, dispatch readability #13). v0.5.2 closed four gaps surfaced by two-node cluster testing (signed failed-receipts, `HandlerFailure`, `cap_envelope` requires `cap_id`, deadline ceiling). v0.5.3 closes five input-validation gaps surfaced by an audit pass: negative `Content-Length` DoS, unhandled malformed-base64 in signature/holder-proof/receipt verifiers, no validation of `max_invocations` / `expires` caveat values, streaming write-order race, and TOFU base64 fault tolerance. 0 documented xfails. Three-platform tested (macOS, Linux, Windows).
+> **Status:** v0.6.0 — V-tier visa machinery (request-visa / grant / refusal as a three-tier trust gradient above v0.5 capabilities), emit-only `protocol_advertisement` field as the smallest substrate-discovery primitive (MUST-NOT consume, enforced architecturally + tested empirically), and Bugs 6/7/8/9 closed from C-tier cluster testing (per-link `parent_cap_id` for K≥3 chain verification, cancelled-receipt on stream partition, rate-limit cap_token binding, rogue-delegator chain re-derivation). Spec v1.1.0-draft → v1.3.0-draft codifies the wire changes. All Bugs 1–9 from the v0.1 case-study battery closed at the reference-implementation level; cross-machine validation pending Stage 2 runs. 281 tests passing locally (macOS); Linux + Windows pending CI on push. v0.6.0 also subsumes the planned v0.5.5 scope (install-string fix, CHANGELOG/CONTRIBUTING/templates, CLI smoke tests, ruff lint pass). Stage 2 adversarial probe harness (25 pre-registered probes) staged for cross-machine NUC-bridge runs.
 
 > **Breaking changes from v0.1 → v0.5:**
 > - `holder_proof` is mandatory when `cap_id` is present (v0.2.0, issue #3)
@@ -19,6 +19,8 @@ Self-certifying identity, holder-bound capabilities, and unilateral audit receip
 > - `auto_grant` constructor parameter is now a no-op (v0.5.1) — was always dead code, kept for back-compat
 > - `build_req(cap_envelope=...)` without an explicit `cap_id` now auto-derives `cap_id` from the envelope, or raises `ValueError` if the envelope lacks one. Previously the envelope was silently transported without verification (v0.5.2)
 > - REQs with deadlines further than `max_deadline_seconds` (default 3600s) in the future are rejected with new fault code `deadline_too_far`. Bump the constructor arg for long-running streaming intents (v0.5.2)
+> - DelegationLink gains required-from-v1.3 `action_at_step` + `caveats_at_step` fields; pre-v1.3 chains verify with `DeprecationWarning` at K=2 only. v1.4 will drop pre-v1.3 support. Re-issue long-lived multi-hop capabilities before v1.4 (v0.6.0, Bug 9 / spec §16.1)
+> - `cancelled` receipt outcome emits on streaming partition; previously specified in spec §12.9 but never written. Downstream code assuming `{completed, failed}` only must add a `cancelled` branch (v0.6.0, #30 / Bug 7)
 
 ## Overview
 
@@ -37,7 +39,7 @@ The reference implementation is ~3,750 LOC in `src/pact/`. The wire protocol is 
 | Replay safety | Mandatory `idempotency_key` per REQ. Durable cache survives process restart. |
 | Causal ordering | `refs[]` field forms a DAG over message history. |
 | Liveness | Mandatory `deadline` with server-side enforcement and configurable upper bound (default 3600s). |
-| Audit | Bilateral signed receipts written for every dispatch — both `outcome=completed` and `outcome=failed` paths. |
+| Audit | Bilateral signed receipts written for every dispatch — `outcome ∈ {completed, failed, cancelled}` including stream partition. |
 
 ### Primitives
 
@@ -167,7 +169,8 @@ contrib/
 | v0.5.2 | Honesty patch: signed `outcome=failed` receipts (E1), `HandlerFailure` for explicit failure signaling (E2), `cap_envelope` foot-gun closed (E11), server-side `max_deadline_seconds` ceiling (E7). All four gaps surfaced by cluster testing. | Done |
 | v0.5.3 | Input-validation patch: negative `Content-Length` DoS closed (F1), malformed base64 in signature/holder-proof/receipt fails closed (F2), `max_invocations`/`expires` caveat values validated at issue/attenuate (F3), streaming write-order race fixed (F4), TOFU rejects malformed pubkey base64 (F5). | Done |
 | v0.5.4 | Public-surface polish: README `agent_id` formula corrected (`sha256(alg \|\| base64(pubkey))` to match `spec/PACT_v1.md`), `[project.urls]` added to `pyproject.toml` (Homepage / Source / Issues / Documentation / Changelog / Security policy now visible on PyPI), `SECURITY.md` added with private vulnerability reporting via GitHub advisories, `auto_grant` constructor argument now emits `DeprecationWarning` when explicitly passed (scheduled for removal in v1.0). No wire changes. | Done |
-| v0.5.5 | Source-tree polish + bug fix. Stale `pact-protocol` package name replaced with `pact-passport` in 10 places — including 3 user-facing `ImportError` messages that previously told users to run an install command for a squatted package name. Ruff lint pass: 56 findings closed (modernized imports, exception chaining, removed dead `CBOR_CONTENT_TYPE` import). Spec revised to `v1.1.0-draft` with normative supersession of §1–§11 by §12 (new §10 conformance checklist, new §13 line-item change summary). Repo hygiene: `CHANGELOG.md`, `CONTRIBUTING.md`, GitHub issue + PR templates. CLI smoke tests + `agent.ask()` end-to-end tests added (164 → 181 tests; cli.py 0% → 41%; agent.py 77% → 83%). v0.6 deferred items now visible as GitHub issues #22–#27. No wire changes. | Done |
+| v0.5.5 | Source-tree polish + bug fix. Stale `pact-protocol` package name replaced with `pact-passport` in 10 places — including 3 user-facing `ImportError` messages that previously told users to run an install command for a squatted package name. Ruff lint pass: 56 findings closed (modernized imports, exception chaining, removed dead `CBOR_CONTENT_TYPE` import). Spec revised to `v1.1.0-draft` with normative supersession of §1–§11 by §12 (new §10 conformance checklist, new §13 line-item change summary). Repo hygiene: `CHANGELOG.md`, `CONTRIBUTING.md`, GitHub issue + PR templates. CLI smoke tests + `agent.ask()` end-to-end tests added (164 → 181 tests; cli.py 0% → 41%; agent.py 77% → 83%). v0.6 deferred items now visible as GitHub issues #22–#27. No wire changes. Subsumed into v0.6.0; never released standalone. | Done |
+| v0.6.0 | V-tier visa machinery (request-visa / grant / refusal as a three-tier trust gradient above v0.5 capabilities) + emit-only `protocol_advertisement` field (MUST-NOT consume, architecturally enforced) + Bugs 6/7/8/9 closed from C-tier cluster testing (per-link `parent_cap_id` for K≥3 chain verification, cancelled-receipt on stream partition, rate-limit cap_token binding, rogue-delegator chain re-derivation). Spec v1.1.0-draft → v1.3.0-draft codifies wire changes. Stage 2 adversarial probe harness (25 pre-registered probes) staged for cross-machine NUC-bridge runs. **Wire changes — see breaking changes above.** | Done |
 
 ## Tests
 
@@ -176,15 +179,15 @@ pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-164 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, RES_CHUNK streaming, the v0.5.2 honesty-patch suite (signed-failed-receipts, HandlerFailure, cap_envelope auto-derive, deadline ceiling), and the v0.5.3 input-validation suite (Content-Length sanitization, malformed-base64 fail-closed, caveat-value validation, streaming write-order, TOFU fault tolerance).
+281 tests, 0 xfails covering: crypto, identity, capabilities, attenuation, messages, receipts, storage, HTTP transport, CBOR content negotiation, async server, key rotation, rate limiting, doctor validation, test vector verification, two-agent integration, three-agent delegation chain (over the wire), determinism, 5 race-condition scenarios under concurrent dispatch, the v0.2 auth hardening triangle, durable idempotency across restarts, rotation refresh, cap envelope verification, RES_CHUNK streaming, the v0.5.2 honesty-patch suite (signed-failed-receipts, HandlerFailure, cap_envelope auto-derive, deadline ceiling), the v0.5.3 input-validation suite (Content-Length sanitization, malformed-base64 fail-closed, caveat-value validation, streaming write-order, TOFU fault tolerance), CLI smoke (init/identity/caps/grant/revoke/receipts/peers/doctor), `PACTAgent.ask()` end-to-end (happy path / unknown target / failed-receipt-on-error), the v0.6.0 V-tier visa battery (V1–V7), `protocol_advertisement` no-consumption proof (6.4 load-bearing), B1 deep-chain attenuation (Bug 6), B3 deep-delegation regression, chain re-derivation (Bug 9), and stream-partition cancelled-receipt (Bug 7). Stage 2 adversarial probe harness (25 pre-registered probes) runs standalone, not under `pytest`.
 
 ### Platform support
 
 | Platform | Status |
 |---|---|
-| **macOS** | 164 passed |
-| **Linux** (CI + Alpine on WSL2) | 164 passed |
-| **Windows 11** | 160 passed, 4 skipped (POSIX-only checks) |
+| **macOS** | 281 passed (v0.6.0 local) |
+| **Linux** (CI + Alpine on WSL2) | pending CI on v0.6.0 push |
+| **Windows 11** | pending CI on v0.6.0 push |
 
 ### Concurrency stress mode
 
