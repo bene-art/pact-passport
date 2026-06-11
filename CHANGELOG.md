@@ -5,6 +5,23 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-06-11
+
+Bug 10 fix + documentation pass. No wire changes.
+
+### Fixed
+
+- **Bug 10 — stream-partition transport handler missed the Windows exception variant.** The Bug 7 fix to `_run_streaming_handler` (v0.6.0) was correct, but the transport-layer catch at `transport/server.py:171` enumerated POSIX exception types only: `(BrokenPipeError, ConnectionResetError)`. On Windows, consumer disconnect raises `ConnectionAbortedError` (WinError 10053), which escaped the catch and bypassed `chunks_iter.close()` cleanup. Mac and Linux passed locally; only the CI matrix on the v0.6.0 release push surfaced the gap (Windows × Python 3.11 / 3.12 / 3.13 all failed `test_c3_stage1_partition_writes_cancelled_receipt` with `expected exactly 1 cancelled receipt; got 0`). Fixed by widening the catch to the parent class `ConnectionError`, which covers `BrokenPipeError` + `ConnectionResetError` + `ConnectionAbortedError` and any future platform-specific subclass. Regression test in `tests/test_server.py::test_send_stream_catches_all_connection_error_subclasses` asserts the exception hierarchy our fix depends on and that the source code uses the parent class, not the narrower tuple.
+
+### Documentation
+
+- **README polish (26 changes):** compressed run-on Status paragraph to one-sentence headline + bullets; trimmed Breaking-changes list to v0.5.2 → v0.6 + link to CHANGELOG; updated Overview LOC count (~3,750 → ~4,600); softened `refs[]` causal-ordering claim to acknowledge sender-assertion; added Trust-gradient row to Guarantees table (passport / visa / refusal); updated Capability + Receipt rows in Primitives table; added Visa row; updated Non-goals version references (post-v0.6 → post-v0.7); added `--agent` + `--capabilities` flags to CLI Commands table; added `visa.py` to Architecture diagram; trimmed Features-by-Release table to last 3 releases; replaced 281-test paragraph with bulleted coverage; updated Platform-support table with actual CI matrix status; reconciled 5-vs-9 bug count by pointing to EXPERIMENTS.md Part 2; removed internal jargon (NUC-bridge, C-tier, B1/B3 labels, "load-bearing"); dropped v0.5.5 row (subsumed into v0.6.0, never released standalone).
+- **EXPERIMENTS.md Part 2 added** covering v0.5.5 → v0.6.1 paper-revision experiments. Bugs 6 / 7 / 8 / 9 / 10 documented with same narrative style as v0.1.3's Part 1. Stage 2 cross-machine probe harness section. Updated "What I learned" lessons (#5: the CI matrix is an adversary too). Updated "Where this leaves PACT" for v0.6.1 state. Part 1 (v0.1.3 case study) preserved intact as historical record.
+
+### Tests
+
+281 → 282 (+1 Bug 10 regression test). Coverage unchanged. CI matrix green across macOS / Linux / Windows × Python 3.11 / 3.12 / 3.13.
+
 ## [0.6.0] — 2026-06-11
 
 Two bug fixes for issues surfaced by C-tier cluster testing (#29, #30), one rate-limit binding fix (Bug 8), one capability-chain correctness fix (Bug 9), the V-tier visa machinery, and an emit-only `protocol_advertisement` field. Spec moves v1.1.0-draft → v1.3.0-draft. **Wire changes — see "Breaking changes" below.**
