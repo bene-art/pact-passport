@@ -147,3 +147,35 @@ def test_slow_loris_read_timeout():
         )
     finally:
         server.stop()
+
+
+def test_send_stream_catches_all_connection_error_subclasses():
+    """Bug 10 regression: pre-v0.6.1, _send_stream caught
+    (BrokenPipeError, ConnectionResetError) only. Windows raises
+    ConnectionAbortedError (WinError 10053) on consumer disconnect,
+    which escaped the catch and bypassed chunks_iter.close() cleanup —
+    leaving zero cancelled receipts written. Fix: catch ConnectionError
+    (parent class).
+
+    This test verifies (1) the Python exception hierarchy our fix
+    depends on and (2) the source code uses ConnectionError, not the
+    narrower POSIX-only tuple. Combined with C3 integration runs
+    across the CI matrix (macOS / Linux / Windows), this locks in
+    the fix and catches future regressions if anyone narrows the
+    catch back.
+    """
+    import inspect
+    import pact.transport.server as server_module
+
+    # The hierarchy our fix relies on:
+    assert issubclass(BrokenPipeError, ConnectionError)
+    assert issubclass(ConnectionResetError, ConnectionError)
+    assert issubclass(ConnectionAbortedError, ConnectionError)
+
+    # Source confirms the widened catch is in place:
+    source = inspect.getsource(server_module)
+    assert "except ConnectionError:" in source, (
+        "Bug 10 regression: _send_stream must catch ConnectionError, "
+        "not the narrower (BrokenPipeError, ConnectionResetError) tuple"
+    )
+

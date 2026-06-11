@@ -137,8 +137,10 @@ class PACTHandler(BaseHTTPRequestHandler):
                     result = self.dispatch(body)
                 # Streaming path: dispatcher returned an iterator (issue #11).
                 # We write each chunk as one NDJSON line over chunked
-                # transfer encoding. Connection drop mid-stream raises
-                # BrokenPipeError, which we treat as cancellation.
+                # transfer encoding. Connection drop mid-stream raises a
+                # ConnectionError subclass (BrokenPipeError on POSIX,
+                # ConnectionAbortedError on Windows), which we treat as
+                # cancellation in _send_stream.
                 if hasattr(result, "__next__") and not isinstance(result, dict):
                     self._send_stream(result)
                 else:
@@ -152,7 +154,11 @@ class PACTHandler(BaseHTTPRequestHandler):
     def _send_stream(self, chunks_iter) -> None:
         """Write a stream of chunk dicts as NDJSON over HTTP chunked
         transfer encoding. Each line is one fully-signed RES_CHUNK.
-        BrokenPipeError = consumer disconnected = cancellation."""
+        ConnectionError = consumer disconnected = cancellation. Covers
+        BrokenPipeError + ConnectionResetError on POSIX and
+        ConnectionAbortedError (WinError 10053) on Windows; using the
+        parent class catches all platform variants without enumerating
+        them. Closes Bug 10 (Windows-only gap in the Bug 7 fix)."""
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.send_header("Transfer-Encoding", "chunked")
@@ -168,7 +174,7 @@ class PACTHandler(BaseHTTPRequestHandler):
             # Terminating zero-length chunk
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+        except ConnectionError:
             # Consumer disconnected mid-stream. Explicitly close the
             # iterator so the streaming generator inside dispatch
             # receives GeneratorExit synchronously — its finally block
