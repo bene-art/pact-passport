@@ -2,6 +2,8 @@
 
 A case study from the v0.1.3 publication. 23 experiments, 5 real bugs, 3 platforms, 2 LLMs across 2 physical machines. Here's what I learned.
 
+> *This document has two parts. Part 1 is the original v0.1.3 case study (5 bugs across 23 experiments). Part 2 covers paper-revision experiments through v0.6.1 that surfaced five additional bugs eight hardening releases later — including one (Bug 10) caught by the CI matrix on the v0.6.0 release push itself — plus a 25-probe cross-machine harness staged for the next experimental window.*
+
 ---
 
 ## The setup
@@ -290,4 +292,178 @@ For now: it works on my machines. It runs my agent stack. The bugs I found are d
 
 ---
 
-*The full repository, including all 23 experiment scripts, is at [github.com/bene-art/pact-passport](https://github.com/bene-art/pact-passport).*
+# Part 2: Paper-revision experiments (v0.5.5 → v0.6.0)
+
+Eight hardening releases later, I ran another battery. Different motivation: the v0.1.3 case study had become the core of a paper claiming that minimal substrates have negative-space gaps that hardening rounds don't naturally find. The paper needed to be more than n=1. If the framework that found Bugs 1–5 was real, it should keep finding bugs in the same codebase under further pressure.
+
+It did.
+
+Between 2026-05-05 (v0.5.4 ship) and 2026-06-11 (v0.6.0 ship), 13 new structured experiments + a V-tier sprint surfaced four more bugs in code that had passed every release of v0.2 → v0.5.5. None of them was caught by the 181-test suite. All four are negative-space, same taxonomy as Bugs 1–5: structural gaps under adversarial pressure, not typos.
+
+## The new experiments
+
+| Tier | Experiments | What I was testing |
+|---|---|---|
+| A (sharpened) | A1–A6 | Spec re-pressure with sharper failure thresholds than v0.1.3 originals |
+| B (deep) | B1, B2 Stage 1, B3 | Multi-hop delegation, holder-proof regression, deep chains at K ∈ {3, 5, 7, 10} |
+| C (perf + correctness) | C1, C2, C3 Stage 1, C4 | Throughput, concurrent streaming, stream partition, refs[] semantics |
+| V (visa) | V1–V7 | The new V-tier trust gradient — over-broad / expired / stolen / escalated visas, plus receipt-fidelity-under-compromise (V3), nonce-replay (V5), parallel-issuance amplification (V6), cross-issuer confusion (V7) |
+
+All experiments pre-registered (target property / adversarial vector / failure threshold / quantified outcome) before execution. Pre-registration is the discipline that makes "I tested it and it passed" mean something different from "I ran code until it stopped throwing." If a probe's prediction doesn't match observation, that's a finding to investigate, not a metric to tune.
+
+## What broke — four more real bugs
+
+### 6. Multi-hop delegation chains fail verification at K ≥ 3
+
+Surfaced by experiment B3 (deep delegation). The verifier at `capability.py:325-335` checked each chain link's signature against `token.parent` — the *final cap's* parent. But each link signed a *different* cap_id at its own attenuation step.
+
+At K = 2 (one delegation link), the last link's parent IS the final token's parent. Test passes. At K ≥ 3, the verifier checks every link against the wrong parent and rejects every legitimate chain.
+
+```python
+# v0.5.x verifier (broken at K ≥ 3):
+for link in token.delegation_chain:
+    expected_parent = token.parent  # WRONG: this is the final cap's parent
+    signable = make_link_signable(link, expected_parent, ...)
+    if not crypto.verify(signable, link.signature, ...):
+        return CapabilityResult(False, "Invalid link signature")
+```
+
+`attenuate()` signed the right thing. `verify_capability()` checked the wrong thing. The two agreed at K = 2 and diverged at K ≥ 3. No K ≥ 3 production chains existed because no one tried — three-agent delegation via `cap_envelope` worked (single hop), but deeper chains silently failed.
+
+**Bug class: convenient-value substitution at a layer boundary.** The signing path knew the per-link parent; the verifier path reached for `token.parent` because it was already in scope. Convenient ≠ correct.
+
+**Fix (v0.6.0, issue #29):** added `parent_cap_id` field to `DelegationLink`. Verifier walks the chain checking each link against its OWN recorded parent. Wire change — see breaking-changes list. Pre-v1.3 chains verify at K = 2 with `DeprecationWarning`; v1.4 will drop the fallback.
+
+### 7. Stream partition skipped the server-side receipt write
+
+Surfaced by C3 Stage 1 (Mac-only, no NUC needed — client disconnects mid-stream, observe server state). The substrate makes an explicit claim in spec §3.5: "a receipt exists on the side that wrote it regardless of the other party's cooperation, network partition, or crash."
+
+That was false for streaming. The implementation:
+
+```python
+# v0.5.x _run_streaming_handler (broken):
+async def _run_streaming_handler(...):
+    try:
+        async for chunk in handler(payload):
+            yield chunk  # <-- BrokenPipeError on client disconnect propagates here
+    except Exception as e:
+        # ...
+    # Receipt write happens here — but BrokenPipeError already escaped
+    store.write_receipt(...)
+```
+
+When the client disconnected, `BrokenPipeError` propagated up through the yield. The `except Exception` clause did NOT catch it (it's `BaseException`-derived but raised via `GeneratorExit` in some paths), the receipt-write line never executed, and the transport-layer handler at `transport/server.py:164` logged-and-moved-on with a comment claiming the receipt had been written. It hadn't.
+
+The `cancelled` receipt outcome was *specified* in spec §12.9. It was never *emitted* by the code.
+
+**Bug class: order of operations broken across layers.** Each layer made a locally-reasonable assumption; the contract between them was unenforced.
+
+**Fix (v0.6.0, issue #30):** restructured to `try / finally` with `outcome` state variable defaulting to `"cancelled"`. The `finally` block writes the signed receipt on every exit path. Idempotency cache populated only on `outcome == "completed"` so cancelled streams retry cleanly. The §3.5 claim now holds for streaming; §12.9's `cancelled` outcome is now actually emitted.
+
+> *Coda (Bug 10, v0.6.1): the v0.6.0 fix above closed the agent-layer order-of-operations gap, but the transport-layer exception catch enumerated POSIX exception types only — see Bug 10 below for the Windows-variant gap surfaced by the CI matrix on the v0.6.0 release push itself.*
+
+### 8. Rate-limit refusal lost the cap_token context
+
+Surfaced by V3 (receipt-fidelity-under-compromise — second visa use after `max_invocations=1` should rate-limit and leave a receipt that names the visa it refused). `_step_verify_capability` was assigning `ctx.cap_token = token` *after* the rate-limit check:
+
+```python
+# v0.5.x dispatch (broken):
+def _step_verify_capability(ctx, msg):
+    token = lookup_cap(msg.cap_id)
+    if rate_limited(token):
+        return refuse()  # ctx.cap_token still None — receipt has no visa metadata
+    ctx.cap_token = token  # too late
+```
+
+The second visa use produced a refusal receipt with no `visa_cap_id`, no `ephemeral_key_fingerprint`, no audit hook to the compromise window V3 was trying to enumerate. The receipt existed; the receipt was useless.
+
+**Bug class: state-binding happens *after* the action it should annotate.** Sister to Bug 7 — same family of "the state-write and the action are in the wrong order." Bug 7's symptom was missing receipts; Bug 8's symptom was under-attributed receipts.
+
+**Fix (v0.6.0):** moved `ctx.cap_token = token` *before* the rate-limit check. Refusal receipts now carry the visa metadata that lets V3's "enumerate the compromise window from receipts alone" test actually do that.
+
+### 9. Rogue-delegator forgery passed chain verification
+
+Surfaced 2026-06-08 when the Bug 6 fix unmasked B1 tests that had been vacuously passing. With per-link `parent_cap_id` checked correctly, the deeper question came into view: the verifier checked link signatures against parent caps, but trusted the child's *declared* `action` and `caveats` without re-deriving them from the chain.
+
+An intermediate delegator with a compromised signing key could mint a child cap whose declared content diverged from any chain of legitimate attenuation steps — widening authority, stripping caveats — and the verifier accepted it. The chain link's signature verified (the rogue delegator had a valid key); the link bound parent_cap_id (Bug 6 fix); but nothing bound the child's *content* to what could legitimately follow from the parent.
+
+**Bug class: trust-child-without-re-derivation.** Sibling to Bug 6. Same family of "the verifier reaches for the convenient value instead of deriving the correct one."
+
+**Fix (v0.6.0):** Macaroons-style chain re-derivation ported to Ed25519. `attenuate()` now signs over `canonical_json({parent_cap_id, action_at_step, caveats_at_step})` — binding the cap's content into each chain link. `verify_capability` walks the chain enforcing (1) action preservation across steps, (2) caveat append-only with canonical-frozenset comparison, (3) final-token consistency with the last link's recorded values. Pre-v1.3 chains accepted at K = 2 with `DeprecationWarning`; v1.4 drops the fallback. Spec §16 codifies.
+
+### 10. Stream-partition transport handler missed the Windows exception variant
+
+Surfaced 2026-06-11 by the CI matrix on the v0.6.0 release push itself. Bug 7's `try/finally` restructure of `_run_streaming_handler` was correct — but the transport-layer catch at `transport/server.py:171` enumerated POSIX exception types only:
+
+```python
+# v0.6.0 _send_stream (broken on Windows):
+try:
+    for chunk_dict in chunks_iter:
+        self.wfile.write(...)
+        self.wfile.flush()
+except (BrokenPipeError, ConnectionResetError):
+    # Consumer disconnected — close iterator synchronously so the
+    # streaming generator's finally block writes the cancelled
+    # receipt before this handler returns.
+    chunks_iter.close()
+```
+
+On Windows, consumer disconnect raises `ConnectionAbortedError` (WinError 10053). The except clause doesn't match. The exception propagates up, `chunks_iter.close()` is never called, and the streaming generator's `finally` block fires only at GC time — which races the test reading the receipt log immediately after disconnect.
+
+Mac and Linux passed because `BrokenPipeError` matches the catch and `close()` runs synchronously. The 281-test local Mac suite never exercised the Windows path. Only the Windows CI matrix (3 Python versions × `test_c3_stage1_partition_writes_cancelled_receipt`) surfaced the gap, asserting `expected exactly 1 cancelled receipt; got 0`.
+
+**Bug class: platform-incomplete exception enumeration.** Same family as Bug 2 (the v0.1.3 O_BINARY corruption) — Windows-specific runtime behavior diverging from POSIX assumptions baked into otherwise-clean code. Bug 2 was about `os.open()` defaulting to text-mode on Windows; Bug 10 is about `ConnectionAbortedError` substituting for `BrokenPipeError` on Windows. Different mechanisms, same lesson: cross-platform claims need cross-platform CI.
+
+**Fix (v0.6.1):** replaced the explicit tuple with the parent class `ConnectionError`, which covers `BrokenPipeError`, `ConnectionResetError`, AND `ConnectionAbortedError` — and any future platform-specific subclass. Regression test in `tests/test_server.py::test_send_stream_catches_all_connection_error_subclasses` asserts (1) the Python exception hierarchy the fix depends on and (2) the source code uses `ConnectionError`, not the narrower tuple. Pre-v0.6.1 narrowing of the catch will trigger a test failure.
+
+**The framework caught itself.** Bug 10 is an incomplete-fix of Bug 7. Found by CI matrix doing what CI matrices are for — running the test on a platform the local dev box couldn't easily exercise. Logged here as a distinct entry rather than a silent patch because the case-study claim is that adversarial pressure surfaces structural gaps; CI matrix counts as adversarial pressure, and the gap was structural (POSIX-only exception coverage in a multi-platform substrate).
+
+## Stage 2 — cross-machine probe harness (staged)
+
+Beyond the 13 experiments above, v0.6.0 ships a 25-probe pre-registered harness designed for cross-machine runs:
+
+- **A tier (6 probes):** policy injection, cost lying, visa partition, refs forgery, rogue delegator, V-amplification
+- **C tier (9 probes in one file):** convergence audit — regression battery for Bugs 1–9
+- **L tier (16 probes in one file):** overhead sweep across 4 pairs × 4 scenarios
+- **M tier (2 probes):** planted regression, v0.5.5 baseline replay
+- **P tier (4 probes):** §16.5 `protocol_advertisement` adversarial — including the load-bearing no-consumption test
+- **R tier (1 probe):** v0.1.3 baseline replay
+- **S tier (7 probes):** LLM-as-adversary, including a 4-model capability sweep
+- **V tier (3 probes):** LLM-refuse / syn-grant / V3-fidelity under model variation
+
+Each probe self-describes via a `@probe` decorator (pairing dict, pre-registered prediction, failure threshold, citation) and writes one JSON to a timestamped results dir. Loopback smoke run on the Mac confirmed 24 of 33 sub-probes execute end-to-end with zero exceptions; the remaining 9 are documented `new_finding` for items whose predictions rely on actual cross-machine behavior (A3 partition, M1/M2 worktree orchestration, P3 MITM) and need the NUC bridge to deliver real results.
+
+Cross-machine results will land in a Part 3 once those runs complete.
+
+## What I learned in Part 2
+
+**1. The framework generalizes across hardening rounds, not just calendar time.** v0.2 through v0.5.5 were eight focused, deliberate hardening releases. Each shipped with care; each ran a 100+ test suite that grew to 181 by v0.5.5. Bugs 6 and 7 persisted latent through all eight. The methodology that found Bugs 1–5 in v0.1 found Bugs 6 and 7 in v0.5.5 with the same shape: pre-register a property, write the adversarial test that would distinguish a passing from a failing implementation, run it, document what you find.
+
+**2. Sibling-class bugs cluster.** Bug 6 fix unmasked Bug 9 (sister: trust-the-child without re-derivation). Bug 7's "order broken across layers" rhymes with Bug 8's "state-binding after action." When you find a bug, the next bugs to look for are its taxonomic siblings.
+
+**3. Pre-registration is the discipline.** Stage 2 probes lock predictions before results. Any mid-run edit shows as a git diff against the pre-registration tag. The friction is the point — it makes post-hoc rationalization visible.
+
+**4. Negative-space holds across 10 bugs and 8 hardening releases.** Zero syntax bugs. Every finding required adversarial pressure to surface; none would have shown up in the 281-test suite without pointing tests at the specific gap. If you only test the happy path, you only find happy-path bugs.
+
+**5. The CI matrix is an adversary too.** Bug 10 was found by CI doing what CI is designed to do — running the test on a platform the dev box doesn't easily exercise. The local 281/281 green on Mac said nothing about Windows. Cross-platform claims require cross-platform CI, not just a "Windows tested" checkbox from months ago. The Bug 10 finding is the framework's first CI-caught bug; logged here as a Part 2 entry rather than a silent patch because that's the bookkeeping the case study commits to.
+
+---
+
+## Where this leaves PACT (v0.6.1)
+
+What's in v0.6.1 (= v0.6.0 + Bug 10 fix + docs pass):
+
+- V-tier visa machinery (request-visa / grant / refusal as a three-tier trust gradient above the v0.5 capability layer)
+- `protocol_advertisement` emit-only field (substrate-discovery primitive; PACT itself never reads or acts on a received advertisement)
+- Bugs 6 / 7 / 8 / 9 / 10 closed at the reference implementation
+- Spec v1.1.0-draft → v1.3.0-draft codifies the wire changes (§14 V-tier, §15 changelog, §16 chain re-derivation + §16.5 protocol_advertisement MUST-NOT, §17 changelog)
+- 282 tests across macOS / Linux / Windows (281 from v0.6.0 + 1 Bug 10 regression test)
+- 25-probe Stage 2 harness staged for cross-machine runs
+
+The case-study bug battery from v0.1.3 (Bugs 1–5) plus the paper-revision findings (Bugs 6–10) make 10 bugs total. All 10 are closed at the reference implementation. All 10 are negative-space — structural gaps surfaced by adversarial pressure (B-tier deep delegation, C-tier stream partition, V-tier visa receipt fidelity, CI matrix cross-platform coverage). None caught by happy-path tests; all caught when the framework was pointed at the specific gap.
+
+What's next: Part 3 (cross-machine Stage 2 results) when the NUC bridge runs complete. Until then, "10 bugs closed at the reference-implementation level; cross-machine Stage 2 pending" is the honest version of the claim.
+
+---
+
+*The full repository, including all 23 v0.1.3 experiment scripts and the 25-probe Stage 2 harness, is at [github.com/bene-art/pact-passport](https://github.com/bene-art/pact-passport).*
