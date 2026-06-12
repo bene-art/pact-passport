@@ -1078,6 +1078,23 @@ class PACTAgent:
         self._store.save_capability(self.name, cap_dict)
         return True
 
+    def list_receipts(self) -> list[dict]:
+        """Read-only access to this agent's authentic receipt store.
+
+        Returns the list of signed receipts this agent itself wrote
+        (one per dispatch, sorted by timestamp). Used by Stage 2 probes
+        (A4 refs forgery, S5 receipt mimicry) to assert orphan-absent:
+        a fabricated receipt-id or refs[] entry that was *accepted at
+        the protocol layer* still does not appear as an authentic
+        receipt in this store. Closes the construct-validity gap noted
+        in `tests/stage2/probe_s5_receipt_mimicry.py`:94 ("we don't
+        currently have a clean introspection of the store").
+
+        No dispatch behavior change; pure read-only accessor wrapping
+        ``self._store.list_receipts(self.name)``.
+        """
+        return self._store.list_receipts(self.name)
+
     def get_causal_chain(self, msg_id: str) -> list[dict]:
         """Walk the message DAG backwards from msg_id to reconstruct causal history."""
         chain = []

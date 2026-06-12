@@ -69,6 +69,33 @@ def test_receipts(tmp_pact_home):
     assert len(receipts) == 1
 
 
+def test_agent_list_receipts_proxies_store(tmp_pact_home):
+    """PACTAgent.list_receipts() is a read-only wrapper around
+    PACTStore.list_receipts(agent.name). Closes the Stage 2 C3-a
+    construct-validity gap (orphan-absent-from-authentic-store
+    assertions in probes A4 / S5).
+    """
+    from pact_passport import PACTAgent
+
+    agent = PACTAgent("introspect_test", store_dir=tmp_pact_home)
+    # Empty store: zero receipts.
+    assert agent.list_receipts() == []
+
+    # Inject two receipts directly via the underlying store.
+    r1 = {"timestamp": "2026-01-01T00:00:00", "task_ref": "m-001", "outcome": "completed"}
+    r2 = {"timestamp": "2026-01-01T00:00:01", "task_ref": "m-002", "outcome": "failed"}
+    agent._store.save_receipt(agent.name, r1)
+    agent._store.save_receipt(agent.name, r2)
+
+    receipts = agent.list_receipts()
+    assert len(receipts) == 2
+    task_refs = {r["task_ref"] for r in receipts}
+    assert task_refs == {"m-001", "m-002"}
+
+    # Orphan-absent shape: a fabricated task_ref must NOT appear.
+    assert "fake_receipt_xyz" not in task_refs
+
+
 def test_messages(tmp_pact_home):
     store = PACTStore(tmp_pact_home)
     msg = {"id": "m-001", "type": "REQ"}
