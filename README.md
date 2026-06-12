@@ -58,7 +58,7 @@ The reference implementation is ~4,600 LOC in `src/pact/`. The wire protocol is 
 - **Cross-organization capability chains.** v0.6 enforces strict `issuer must be self`. Cross-org via a `trusted_issuers` set is post-v0.7.
 - **Application-level caveat enforcement.** Caveats validate structurally at issue/attenuate; handler-side enforcement is post-v0.7.
 - **Cross-machine revocation propagation.** Issuer-local only — no CRL, no push-REVOKE.
-- **Post-quantum signatures.** Ed25519 throughout. `crypto.py` is a single-file seam for the eventual migration.
+- **Post-quantum signatures.** Ed25519 throughout. Crypto is isolated to one module (`crypto.py`) — but a real PQ migration changes `agent_id` derivation, signature/token sizes, the spec, and test vectors. Not a one-line swap; the surface is just contained.
 - **Per-token cost accounting.** Rate limits via `max_invocations` only. Token economics belong one layer up.
 
 ## Install
@@ -79,7 +79,7 @@ pip install pact-passport[fast]    # Async uvicorn server
 pip install pact-passport[lak]     # local-agent-kit integration
 ```
 
-The Python module is `pact` regardless of the distribution name — `from pact import PACTAgent` works either way.
+The Python module is `pact_passport` (matches the PyPI distribution name). Import as `from pact_passport import PACTAgent`. v0.6.x and earlier installed the module as `pact`, which silently shadowed the `pact-python` contract-testing library when both were installed — see CHANGELOG migration notes for v0.7.0.
 
 ## Quick Start
 
@@ -100,7 +100,7 @@ pact receipts
 ### Python API
 
 ```python
-from pact import PACTAgent
+from pact_passport import PACTAgent
 
 agent = PACTAgent("alice", capabilities=["get_weather"])
 
@@ -140,7 +140,7 @@ Runs two agents in-process, exchanges a capability-scoped task, and verifies rec
 ## Architecture
 
 ```
-crypto.py                All PyNaCl in one file (post-quantum swap = one file change)
+crypto.py                All PyNaCl in one module (crypto surface isolated; PQ migration is non-trivial but contained)
 identity.py              Ed25519 identity, agent_id, key event log, rotation
 capability.py            Token issue, attenuate, verify, multi-hop delegation chains (Macaroons-style re-derivation)
 visa.py                  V-tier visa machinery: issuance policy, holder-proof binding, peer-network-id rate limits
