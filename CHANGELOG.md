@@ -5,6 +5,41 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-06-11
+
+Module rename for namespace hygiene + post-quantum claim softened. No wire / on-disk / behavior changes. Both fixes prompted by external review of v0.6.1.
+
+### Breaking changes
+
+- **Python module renamed: `pact` → `pact_passport`.** The previous import path silently shadowed [`pact-python`](https://pypi.org/project/pact-python/) — the widely-used Pact Foundation contract-testing library, which also installs as the `pact` module. Any environment with both packages installed had unpredictable behavior depending on `sys.path` order. After v0.7.0, both packages coexist without conflict.
+
+  **Migration (every import path):**
+
+  ```python
+  # Before (v0.6.x and earlier):
+  from pact import PACTAgent
+  from pact.capability import issue_capability, Caveat
+  from pact.message import build_req, verify_message
+
+  # After (v0.7.0+):
+  from pact_passport import PACTAgent
+  from pact_passport.capability import issue_capability, Caveat
+  from pact_passport.message import build_req, verify_message
+  ```
+
+  **Unchanged:**
+  - PyPI package name: `pact-passport` (`pip install pact-passport` works as before).
+  - CLI binary: `pact` (no conflict — pact-python ships `pact-broker`, `pact-stub-service`, etc., not a bare `pact`).
+  - Wire protocol, on-disk format, capability tokens, receipts, test vectors, spec — no changes. v0.6.1 receipts/caps remain valid; only the import path moves.
+
+### Changed
+
+- **Post-quantum claim softened in README.** Architecture box and Non-goals previously said `crypto.py` was "a single-file seam for the eventual migration" / "post-quantum swap = one file change". Both overclaimed — a real PQ migration changes `agent_id` derivation (PQ pubkeys are 1–4KB vs Ed25519's 32B), signature/token sizes, the spec, and test vectors. Updated to acknowledge the migration is non-trivial; the architectural point ("crypto isolated to one module") is preserved.
+
+### Tests
+
+282 tests, all passing. No count change — every test file's imports moved from `pact` to `pact_passport`; no test behavior changes.
+
 ## [0.6.1] — 2026-06-11
 
 Bug 10 fix + documentation pass. No wire changes.
