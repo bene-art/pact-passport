@@ -9,10 +9,11 @@
 
 Self-certifying identity, holder-bound capabilities, and unilateral audit receipts for agent-to-agent systems. Three message types — REQ, RES, RES_CHUNK. Everything else is built at the edges.
 
-> **Status: v0.6.1** — three-tier trust gradient (passport / visa / refusal) shipped on top of the v0.5 capability layer. Spec v1.1 → v1.3 codifies the wire changes. Bugs 1–10 from the v0.1 case-study battery + paper-revision experiments closed at the reference-implementation level; cross-machine Stage 2 runs pending.
+> **Status: v0.7.x** — Python module renamed `pact` → `pact_passport` (v0.7.0) to avoid silent shadowing with [`pact-python`](https://pypi.org/project/pact-python/), the widely-used contract-testing library. Post-quantum claim softened per external review. CI/release workflows on Node 24. All v0.6 substrate features intact: three-tier trust gradient (passport / visa / refusal) on top of the v0.5 capability layer; spec v1.1 → v1.3; Bugs 1–10 from the v0.1 case-study battery + paper-revision experiments closed at the reference-implementation level; cross-machine Stage 2 runs pending.
 >
+> - Migration from v0.6.x: `from pact import X` → `from pact_passport import X`. PyPI package name (`pact-passport`) and CLI binary (`pact`) unchanged.
 > - V-tier visa machinery + emit-only `protocol_advertisement` field (PACT itself never reads or acts on a received advertisement — see spec §16.5).
-> - Bugs 6 / 7 / 8 / 9 closed in v0.6.0; Bug 10 (Windows-only gap in the Bug 7 stream-partition fix) closed in v0.6.1 after the CI matrix caught it on the v0.6.0 release push.
+> - Bugs 6 / 7 / 8 / 9 closed in v0.6.0; Bug 10 (Windows-only gap in the Bug 7 stream-partition fix) closed in v0.6.1 after the CI matrix caught it.
 > - 282 tests passing across macOS / Linux / Windows (CI matrix green; some POSIX-only tests skipped on Windows).
 > - Stage 2 adversarial probe harness (25 pre-registered probes) ready for cross-machine runs.
 > - Full case-study details in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) Part 2.
@@ -27,7 +28,7 @@ Self-certifying identity, holder-bound capabilities, and unilateral audit receip
 
 PACT Passport is a Python implementation of a minimal trust substrate for agent-to-agent interaction. It sits below orchestration protocols like MCP and A2A as the layer that answers *who is this agent, what can they do, and what did they do*. Three primitives — self-certifying identity, holder-bound capability tokens, signed messages — plus unilateral audit receipts. No central authority, no shared secrets, no registry.
 
-The reference implementation is ~4,600 LOC in `src/pact/`. The wire protocol is specified in [`spec/PACT_v1.md`](spec/PACT_v1.md) — sufficient for independent implementations. Deterministic test vectors at [`tests/vectors/pact_v1_vectors.json`](tests/vectors/pact_v1_vectors.json).
+The reference implementation is ~4,600 LOC in `src/pact_passport/`. The wire protocol is specified in [`spec/PACT_v1.md`](spec/PACT_v1.md) — sufficient for independent implementations. Deterministic test vectors at [`tests/vectors/pact_v1_vectors.json`](tests/vectors/pact_v1_vectors.json).
 
 ### Guarantees
 
@@ -47,11 +48,11 @@ The reference implementation is ~4,600 LOC in `src/pact/`. The wire protocol is 
 
 | Primitive | What it is | Source |
 |---|---|---|
-| **Identity** | Ed25519 keypair with self-certifying `agent_id` derived from the pubkey, plus a `next_key_digest` commitment for KERI-style rotation. | `src/pact/identity.py` |
-| **Capability** | Signed, holder-bound token. Caveats append-only; verifier re-derives action + caveats at each chain step (Macaroons-style). Multi-hop delegation at any depth verifies inline via `cap_envelope`. | `src/pact/capability.py` |
-| **Visa** | Session-scoped, attenuated capability bound to an ephemeral key. Issued by a gatekeeper to a passport-less counterparty; binds the *session*, not the *identity*. | `src/pact/visa.py` |
-| **Message** | `REQ` / `RES` / `RES_CHUNK` (streaming). Mandatory `deadline` + `idempotency_key`. `refs[]` carries sender-asserted causal back-references. | `src/pact/message.py` |
-| **Receipt** | Each side writes its own signed receipt unilaterally — no coordination required. Both receipts share `task_ref`, so the pair reconstructs a bilateral trace post-hoc. `outcome ∈ {completed, failed, cancelled}`. | `src/pact/receipt.py` |
+| **Identity** | Ed25519 keypair with self-certifying `agent_id` derived from the pubkey, plus a `next_key_digest` commitment for KERI-style rotation. | `src/pact_passport/identity.py` |
+| **Capability** | Signed, holder-bound token. Caveats append-only; verifier re-derives action + caveats at each chain step (Macaroons-style). Multi-hop delegation at any depth verifies inline via `cap_envelope`. | `src/pact_passport/capability.py` |
+| **Visa** | Session-scoped, attenuated capability bound to an ephemeral key. Issued by a gatekeeper to a passport-less counterparty; binds the *session*, not the *identity*. | `src/pact_passport/visa.py` |
+| **Message** | `REQ` / `RES` / `RES_CHUNK` (streaming). Mandatory `deadline` + `idempotency_key`. `refs[]` carries sender-asserted causal back-references. | `src/pact_passport/message.py` |
+| **Receipt** | Each side writes its own signed receipt unilaterally — no coordination required. Both receipts share `task_ref`, so the pair reconstructs a bilateral trace post-hoc. `outcome ∈ {completed, failed, cancelled}`. | `src/pact_passport/receipt.py` |
 
 ### Non-goals
 
@@ -160,13 +161,14 @@ contrib/
 
 ## Features by Release
 
-Last 3 releases below; see [CHANGELOG.md](CHANGELOG.md) for v0.1 → v0.5.3 history.
+Last 4 releases below; see [CHANGELOG.md](CHANGELOG.md) for v0.1 → v0.5.4 history.
 
 | Release | Feature | Status |
 |---|---|---|
-| v0.5.4 | Public-surface polish: README `agent_id` formula corrected, `[project.urls]` added to `pyproject.toml`, `SECURITY.md` added, `auto_grant` emits `DeprecationWarning` (scheduled for v1.0 removal). No wire changes. | Done |
 | v0.6.0 | V-tier visa machinery + emit-only `protocol_advertisement` field + Bugs 6/7/8/9 closed (per-link `parent_cap_id` at K≥3, cancelled-receipt on stream partition, rate-limit cap_token binding, rogue-delegator chain re-derivation). Spec v1.1.0-draft → v1.3.0-draft. Stage 2 adversarial probe harness staged. **Wire changes — see breaking changes above.** | Done |
 | v0.6.1 | Bug 10 fix: stream-partition transport handler now catches `ConnectionError` (parent class), covering `ConnectionAbortedError` (Windows WinError 10053) in addition to `BrokenPipeError` / `ConnectionResetError` (POSIX). Caught by CI matrix on the v0.6.0 release push. README polish + EXPERIMENTS.md Part 2 documenting Bugs 6–10. No wire changes. | Done |
+| v0.7.0 | **Python module renamed `pact` → `pact_passport`** to avoid silent shadowing with [`pact-python`](https://pypi.org/project/pact-python/) (Pact Foundation contract-testing lib, installs as `pact` too). Post-quantum claim softened per external review. CI/release actions bumped to Node 24 ahead of GitHub's 2026-06-16 force-upgrade. PyPI package name and CLI binary unchanged. **Import-path breaking change — see CHANGELOG.md for migration.** | Done |
+| v0.7.1 | README-only patch: v0.7.0's README didn't reflect its own rename (stale `src/pact/` paths in Overview + Primitives table; stale Status line still saying v0.6.1; missing v0.7.0 entry in Features-by-Release). No code change. | Done |
 
 ## Tests
 

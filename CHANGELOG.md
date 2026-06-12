@@ -5,6 +5,21 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-06-12
+
+README-only patch. v0.7.0's README didn't reflect v0.7.0's own rename — shipped to PyPI with stale `src/pact/` paths and a Status line still saying v0.6.1. No code change.
+
+### Fixed (README only)
+
+- **Status block** updated from "v0.6.1" to "v0.7.x" and now describes the rename + PQ soften + Node 24 actions. Includes a one-line migration note (`from pact import X` → `from pact_passport import X`).
+- **Overview** LOC line: `src/pact/` → `src/pact_passport/`.
+- **Primitives table** Source column: 5 rows updated from `src/pact/X.py` to `src/pact_passport/X.py` (identity, capability, visa, message, receipt).
+- **Features-by-Release table** dropped v0.5.4 (oldest), added v0.7.0 + v0.7.1 rows. Intro updated from "last 3" to "last 4".
+
+### Why a release for README-only
+
+PyPI displays the README from the wheel METADATA, frozen per release. The v0.7.0 wheel had a stale README baked in. Fixing the GitHub README would leave PyPI showing inconsistent paths until the next substantive release. v0.7.1 ships a corrected README via the same OIDC publish workflow.
+
 ## [0.7.0] — 2026-06-11
 
 Module rename for namespace hygiene + post-quantum claim softened. No wire / on-disk / behavior changes. Both fixes prompted by external review of v0.6.1.
