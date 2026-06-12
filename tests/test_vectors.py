@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from nacl.signing import SigningKey
-from pact import crypto
-from pact._canonical import canonical_json
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
 
 
 VECTORS_PATH = Path(__file__).parent / "vectors" / "pact_v1_vectors.json"

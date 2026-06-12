@@ -14,9 +14,9 @@ import warnings
 from datetime import datetime, UTC
 from dataclasses import dataclass, field
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact.errors import AttenuationViolation
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport.errors import AttenuationViolation
 
 
 @dataclass

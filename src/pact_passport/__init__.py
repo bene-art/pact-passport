@@ -5,18 +5,18 @@ capability tokens (Macaroons-style attenuable), three message types
 (REQ / RES / RES_CHUNK), unilateral audit receipts. Built at the edges.
 """
 
-from pact._version import __version__
-from pact.agent import PACTAgent
-from pact.errors import HandlerFailure
-from pact.capability import (
+from pact_passport._version import __version__
+from pact_passport.agent import PACTAgent
+from pact_passport.errors import HandlerFailure
+from pact_passport.capability import (
     CapabilityToken,
     Caveat,
     attenuate,
     issue_capability,
     verify_capability,
 )
-from pact.identity import Identity
-from pact.message import (
+from pact_passport.identity import Identity
+from pact_passport.message import (
     PACTMessage,
     build_req,
     build_res,
@@ -24,13 +24,13 @@ from pact.message import (
     verify_holder_proof,
     verify_message,
 )
-from pact.receipt import create_receipt, verify_receipt
-from pact.transport.client import (
+from pact_passport.receipt import create_receipt, verify_receipt
+from pact_passport.transport.client import (
     fetch_identity,
     send_message,
     send_message_streaming,
 )
-from pact.visa import (
+from pact_passport.visa import (
     HandlerCost,
     ProtocolAdvertisement,
     VisaContext,

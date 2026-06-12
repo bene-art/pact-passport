@@ -9,8 +9,8 @@ import base64
 import binascii
 from datetime import datetime, UTC
 
-from pact import crypto
-from pact._canonical import canonical_json
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
 
 
 def create_receipt(

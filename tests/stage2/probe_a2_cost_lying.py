@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from pact import (
+from pact_passport import (
     HandlerCost, PACTAgent, build_req, issue_capability, send_message,
 )
 

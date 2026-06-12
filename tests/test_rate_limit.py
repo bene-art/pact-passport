@@ -3,10 +3,10 @@
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from pact.identity import Identity
-from pact.capability import issue_capability, Caveat
-from pact.message import PACTMessage, build_req
-from pact.agent import PACTAgent
+from pact_passport.identity import Identity
+from pact_passport.capability import issue_capability, Caveat
+from pact_passport.message import PACTMessage, build_req
+from pact_passport.agent import PACTAgent
 
 
 def test_rate_limit_enforced(store):

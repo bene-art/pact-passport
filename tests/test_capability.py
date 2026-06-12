@@ -5,8 +5,8 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from pact import crypto
-from pact.capability import (
+from pact_passport import crypto
+from pact_passport.capability import (
     attenuate,
     Caveat, CapabilityToken, DelegationLink,
     issue_capability, verify_capability, CapabilityResult,
@@ -151,7 +151,7 @@ def _build_legacy_two_hop_chain():
     """
     import base64 as b64
     import uuid
-    from pact._canonical import canonical_json
+    from pact_passport._canonical import canonical_json
 
     alice_priv, alice_pub = crypto.generate_keypair()
     bob_priv, bob_pub = crypto.generate_keypair()
@@ -326,7 +326,7 @@ def test_v1_2_chain_format_emits_deprecation_warning_in_v1_3_verifier():
     cannot be enforced for such chains; v1.4 will reject them."""
     import base64 as b64
     import uuid
-    from pact._canonical import canonical_json
+    from pact_passport._canonical import canonical_json
 
     # Build a v1.2-format chain (no action_at_step / caveats_at_step)
     alice_priv, alice_pub = crypto.generate_keypair()

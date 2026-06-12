@@ -21,8 +21,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from pact.message import build_req
-from pact.transport.client import send_message_streaming
+from pact_passport.message import build_req
+from pact_passport.transport.client import send_message_streaming
 
 
 def test_c2_jitter_streaming_chunks_arrive_in_order(sandbox, capsys):

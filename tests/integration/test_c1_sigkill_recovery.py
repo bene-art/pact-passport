@@ -31,10 +31,10 @@ from pathlib import Path
 
 import pytest
 
-from pact import PACTAgent
-from pact.identity import Identity
-from pact.message import build_req
-from pact.store import PACTStore
+from pact_passport import PACTAgent
+from pact_passport.identity import Identity
+from pact_passport.message import build_req
+from pact_passport.store import PACTStore
 
 
 def _dispatch_req_to_agent_in_process(store_dir: Path, sender: Identity, payload_msg: str):
@@ -174,7 +174,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from pact.agent import PACTAgent
+from pact_passport.agent import PACTAgent
 
 agent = PACTAgent("alice", store_dir=Path({store_dir!r}), port=0)
 agent._ensure_identity()
@@ -183,7 +183,7 @@ agent._ensure_identity()
 # blocks the main thread on Ctrl-C. We instead start it non-blocking
 # and just busy-wait, since the parent will SIGKILL us.
 
-from pact.transport.server import PACTServer
+from pact_passport.transport.server import PACTServer
 identity = agent._ensure_identity()
 server = PACTServer(
     host="127.0.0.1",

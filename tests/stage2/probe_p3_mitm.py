@@ -19,11 +19,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from pact import (
+from pact_passport import (
     HandlerCost, PACTAgent, PACTMessage, ProtocolAdvertisement, crypto,
 )
-from pact._canonical import canonical_json
-from pact.message import verify_message
+from pact_passport._canonical import canonical_json
+from pact_passport.message import verify_message
 
 from tests.stage2._harness import probe
 

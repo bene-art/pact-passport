@@ -10,8 +10,8 @@ import urllib.request
 import urllib.error
 from collections.abc import Iterator
 
-from pact.message import PACTMessage
-from pact._canonical import (
+from pact_passport.message import PACTMessage
+from pact_passport._canonical import (
     encode_message, decode_message,
     JSON_CONTENT_TYPE,
 )

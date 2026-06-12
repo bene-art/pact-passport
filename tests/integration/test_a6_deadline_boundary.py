@@ -25,8 +25,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from pact import PACTAgent
-from pact.message import build_req
+from pact_passport import PACTAgent
+from pact_passport.message import build_req
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +81,8 @@ def _build_req_with_explicit_deadline(agent_obj, deadline_iso: str):
     )
     # Overwrite deadline + re-sign
     req.deadline = deadline_iso
-    from pact import crypto
-    from pact._canonical import canonical_json
+    from pact_passport import crypto
+    from pact_passport._canonical import canonical_json
     req.signature = ""
     payload_bytes = canonical_json(req.signable_dict())
     sig = crypto.sign(payload_bytes, agent_obj._identity._private_key)

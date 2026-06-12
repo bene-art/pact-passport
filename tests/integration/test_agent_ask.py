@@ -43,7 +43,7 @@ def test_agent_ask_with_capability_succeeds(sandbox, monkeypatch):
                 "capabilities": ["echo"],
             }
         return None
-    monkeypatch.setattr("pact.agent.resolve_agent", fake_resolve)
+    monkeypatch.setattr("pact_passport.agent.resolve_agent", fake_resolve)
 
     # Alice grants bob an echo capability. Then transfer the cap to bob's store
     # (mimicking what a real out-of-band cap delivery would do).
@@ -66,7 +66,7 @@ def test_agent_ask_unknown_target_returns_not_found(sandbox, monkeypatch):
     """If resolve_agent returns None, ask reports a clean fault rather than raising."""
     bob = sandbox["bob"]
 
-    monkeypatch.setattr("pact.agent.resolve_agent", lambda target: None)
+    monkeypatch.setattr("pact_passport.agent.resolve_agent", lambda target: None)
 
     result = bob["agent"].ask("nonexistent", "echo", payload={})
 
@@ -81,7 +81,7 @@ def test_agent_ask_writes_failed_receipt_on_error(sandbox, monkeypatch):
     bob = sandbox["bob"]
 
     # Alice has no handler registered for "missing_action"
-    monkeypatch.setattr("pact.agent.resolve_agent", lambda target: {
+    monkeypatch.setattr("pact_passport.agent.resolve_agent", lambda target: {
         "name": "alice",
         "agent_id": alice["agent_id"],
         "host": "127.0.0.1",

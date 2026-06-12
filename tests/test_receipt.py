@@ -1,7 +1,7 @@
 """Tests for receipt module."""
 
-from pact import crypto
-from pact.receipt import create_receipt, verify_receipt
+from pact_passport import crypto
+from pact_passport.receipt import create_receipt, verify_receipt
 
 
 def test_create_receipt():

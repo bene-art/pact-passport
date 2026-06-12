@@ -3,12 +3,12 @@
 import time
 import base64
 
-from pact.identity import Identity
-from pact.capability import issue_capability, Caveat
-from pact.message import build_req, build_res, verify_message
-from pact.receipt import create_receipt, verify_receipt
-from pact.transport.server import PACTServer
-from pact.transport.client import send_message, fetch_identity
+from pact_passport.identity import Identity
+from pact_passport.capability import issue_capability, Caveat
+from pact_passport.message import build_req, build_res, verify_message
+from pact_passport.receipt import create_receipt, verify_receipt
+from pact_passport.transport.server import PACTServer
+from pact_passport.transport.client import send_message, fetch_identity
 
 
 def test_full_exchange(store):
@@ -25,7 +25,7 @@ def test_full_exchange(store):
 
     # Bob sets up a server
     def bob_dispatch(body):
-        from pact.message import PACTMessage, build_res
+        from pact_passport.message import PACTMessage, build_res
         msg = PACTMessage.from_dict(body)
 
         if msg.intent == "identity":
@@ -72,7 +72,7 @@ def test_full_exchange(store):
         assert result["payload"]["temp"] == 72
 
         # Verify response signature
-        from pact.message import PACTMessage
+        from pact_passport.message import PACTMessage
         res_msg = PACTMessage.from_dict(result)
         assert verify_message(res_msg, bob.public_key)
 

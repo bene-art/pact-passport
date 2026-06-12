@@ -22,9 +22,9 @@ import urllib.request
 
 import pytest
 
-from pact import crypto
-from pact.identity import Identity
-from pact.message import build_req, verify_message
+from pact_passport import crypto
+from pact_passport.identity import Identity
+from pact_passport.message import build_req, verify_message
 
 from tests.integration.conftest import post_message
 

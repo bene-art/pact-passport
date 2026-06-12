@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 
-from pact.transport.server import PACTServer
+from pact_passport.transport.server import PACTServer
 
 
 def test_health_endpoint():
@@ -165,7 +165,7 @@ def test_send_stream_catches_all_connection_error_subclasses():
     catch back.
     """
     import inspect
-    import pact.transport.server as server_module
+    import pact_passport.transport.server as server_module
 
     # The hierarchy our fix relies on:
     assert issubclass(BrokenPipeError, ConnectionError)

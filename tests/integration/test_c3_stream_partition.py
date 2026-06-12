@@ -42,7 +42,7 @@ import urllib.request
 
 import pytest
 
-from pact.message import build_req
+from pact_passport.message import build_req
 
 
 def _send_streaming_and_abort_at_chunk(url: str, req_dict: dict, abort_at: int):

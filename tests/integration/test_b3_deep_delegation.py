@@ -34,17 +34,17 @@ import uuid
 
 import pytest
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact.capability import (
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport.capability import (
     Caveat,
     DelegationLink,
     attenuate,
     issue_capability,
 )
-from pact.identity import Identity
-from pact.message import build_req
-from pact.store import PACTStore
+from pact_passport.identity import Identity
+from pact_passport.message import build_req
+from pact_passport.store import PACTStore
 
 from tests.integration.conftest import post_message
 

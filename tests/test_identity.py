@@ -1,7 +1,7 @@
 """Tests for identity module."""
 
-from pact.identity import Identity
-from pact import crypto
+from pact_passport.identity import Identity
+from pact_passport import crypto
 
 
 def test_create_identity(store):

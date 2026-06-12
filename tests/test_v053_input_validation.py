@@ -16,16 +16,16 @@ import threading
 
 import pytest
 
-from pact import (
+from pact_passport import (
     PACTAgent, HandlerFailure,
     build_req, send_message, fetch_identity,
     issue_capability, attenuate, Caveat,
     verify_message, verify_holder_proof, verify_receipt,
     CapabilityToken, Caveat as Cav,
 )
-from pact import crypto
-from pact.capability import verify_capability
-from pact.transport.server import PACTServer
+from pact_passport import crypto
+from pact_passport.capability import verify_capability
+from pact_passport.transport.server import PACTServer
 
 
 # -- F1: Content-Length validation -------------------------------------------

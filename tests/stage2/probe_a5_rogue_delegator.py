@@ -15,7 +15,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from pact import attenuate, issue_capability, verify_capability
+from pact_passport import attenuate, issue_capability, verify_capability
 
 from tests.stage2._harness import (
     probe, stand_up_agent, teardown,

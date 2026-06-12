@@ -17,13 +17,13 @@ import json
 
 import pytest
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact.capability import (
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport.capability import (
     Caveat, CapabilityToken, DelegationLink,
     issue_capability, attenuate, verify_capability,
 )
-from pact.message import build_req
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 
@@ -82,8 +82,8 @@ def test_unknown_peer_with_inline_identity_handshake_works(sandbox):
         return {"pong": True}
 
     # Brand-new identity bob hasn't seen
-    from pact.identity import Identity
-    from pact.store import PACTStore
+    from pact_passport.identity import Identity
+    from pact_passport.store import PACTStore
     from pathlib import Path
     import tempfile, os
     tmp = Path(tempfile.mkdtemp())

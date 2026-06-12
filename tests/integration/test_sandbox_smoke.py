@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pact.message import build_req, PACTMessage, verify_message
+from pact_passport.message import build_req, PACTMessage, verify_message
 
 from tests.integration.conftest import _http_get_json, post_message
 

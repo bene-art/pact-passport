@@ -24,9 +24,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from pact.agent import PACTAgent
-from pact.identity import Identity
-from pact.transport.server import PACTServer
+from pact_passport.agent import PACTAgent
+from pact_passport.identity import Identity
+from pact_passport.transport.server import PACTServer
 
 # ---------------------------------------------------------------------------
 # Results directory — one timestamped folder per harness import

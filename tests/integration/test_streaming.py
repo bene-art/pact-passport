@@ -12,8 +12,8 @@ verifiable.
 
 from __future__ import annotations
 
-from pact.message import build_req, PACTMessage, verify_message
-from pact.transport.client import send_message_streaming
+from pact_passport.message import build_req, PACTMessage, verify_message
+from pact_passport.transport.client import send_message_streaming
 
 
 def test_streaming_round_trip(sandbox):

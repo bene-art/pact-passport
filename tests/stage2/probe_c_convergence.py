@@ -25,7 +25,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from pact import (
+from pact_passport import (
     attenuate, build_req, issue_capability, send_message, verify_capability,
 )
 
@@ -159,7 +159,7 @@ def C2(result):
 def C3(result):
     import warnings
     with tempfile.TemporaryDirectory() as tmp:
-        from pact import PACTAgent
+        from pact_passport import PACTAgent
         a = PACTAgent("c3-a", store_dir=Path(tmp) / "a")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -347,7 +347,7 @@ def C8(result):
     # tracker increment happens *after* the policy decision call (the closing
     # ordering pattern from the original fix).
     import inspect
-    from pact import agent as agent_mod
+    from pact_passport import agent as agent_mod
     src = inspect.getsource(agent_mod.PACTAgent._handle_visa_request)
     # Heuristics — the closing-pattern indicators for the Bug 8 fix:
     has_visa_tracker_record = "_visa_tracker.record" in src or "visa_tracker.record" in src

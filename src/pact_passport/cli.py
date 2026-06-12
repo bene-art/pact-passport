@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 
-from pact.store import PACTStore
+from pact_passport.store import PACTStore
 
 
 def _get_store() -> PACTStore:
@@ -15,7 +15,7 @@ def _get_store() -> PACTStore:
 
 def cmd_init(args: argparse.Namespace) -> None:
     """Generate a new agent identity."""
-    from pact.identity import Identity
+    from pact_passport.identity import Identity
 
     store = _get_store()
     name = args.name
@@ -35,7 +35,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     """Start a PACT agent server."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     store = _get_store()
     name = args.agent
@@ -74,7 +74,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def cmd_discover(args: argparse.Namespace) -> None:
     """Discover PACT agents on the local network."""
-    from pact.transport.discovery import discover_agents
+    from pact_passport.transport.discovery import discover_agents
 
     agents = discover_agents(timeout=args.timeout)
 
@@ -95,7 +95,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
 
 def cmd_ask(args: argparse.Namespace) -> None:
     """Send a task REQ to another agent."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     store = _get_store()
     name = args.agent
@@ -198,8 +198,8 @@ def cmd_identity(args: argparse.Namespace) -> None:
 
 def cmd_grant(args: argparse.Namespace) -> None:
     """Issue a capability token to another agent."""
-    from pact.agent import PACTAgent
-    from pact.capability import Caveat
+    from pact_passport.agent import PACTAgent
+    from pact_passport.capability import Caveat
 
     store = _get_store()
     name = _resolve_agent_name(store, args.agent)
@@ -229,7 +229,7 @@ def cmd_grant(args: argparse.Namespace) -> None:
 
 def cmd_revoke(args: argparse.Namespace) -> None:
     """Revoke a capability token."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     store = _get_store()
     name = _resolve_agent_name(store, args.agent)
@@ -267,7 +267,7 @@ def cmd_caps(args: argparse.Namespace) -> None:
 
 def cmd_trace(args: argparse.Namespace) -> None:
     """Trace the causal chain for a message."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     store = _get_store()
     name = _resolve_agent_name(store, args.agent)
@@ -300,7 +300,7 @@ def cmd_trace(args: argparse.Namespace) -> None:
 
 def cmd_rotate(args: argparse.Namespace) -> None:
     """Rotate an agent's keys using pre-rotation."""
-    from pact.identity import Identity
+    from pact_passport.identity import Identity
 
     store = _get_store()
     name = _resolve_agent_name(store, args.name)
@@ -327,7 +327,7 @@ def cmd_rotate(args: argparse.Namespace) -> None:
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     """Validate agent setup: keys, event log, permissions."""
-    from pact.identity import Identity
+    from pact_passport.identity import Identity
 
     store = _get_store()
     name = _resolve_agent_name(store, args.name)

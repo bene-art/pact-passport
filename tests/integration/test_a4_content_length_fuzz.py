@@ -23,7 +23,7 @@ import socket
 
 import pytest
 
-from pact.transport.server import PACTServer
+from pact_passport.transport.server import PACTServer
 
 
 # ---------------------------------------------------------------------------

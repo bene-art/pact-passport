@@ -14,10 +14,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from pact import (
+from pact_passport import (
     HandlerCost, PACTAgent, PACTMessage, ProtocolAdvertisement, crypto,
 )
-from pact._canonical import canonical_json
+from pact_passport._canonical import canonical_json
 
 from tests.stage2._harness import probe
 

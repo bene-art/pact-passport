@@ -11,8 +11,8 @@ dispatch) and asserts the implementation matches.
 
 from __future__ import annotations
 
-from pact.capability import issue_capability
-from pact.message import build_req
+from pact_passport.capability import issue_capability
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 

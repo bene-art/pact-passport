@@ -26,8 +26,8 @@ from __future__ import annotations
 import json
 import uuid
 
-from pact import crypto
-from pact.message import build_req
+from pact_passport import crypto
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 

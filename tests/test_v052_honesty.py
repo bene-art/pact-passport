@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from pact import (
+from pact_passport import (
     PACTAgent, HandlerFailure,
     build_req, send_message, fetch_identity,
     issue_capability, Caveat,

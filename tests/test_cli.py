@@ -17,8 +17,8 @@ import types
 
 import pytest
 
-from pact import cli
-from pact.store import PACTStore
+from pact_passport import cli
+from pact_passport.store import PACTStore
 
 
 @pytest.fixture

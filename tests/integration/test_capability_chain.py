@@ -2,15 +2,15 @@
 
 from datetime import datetime, timezone, timedelta
 
-from pact import crypto
-from pact.identity import Identity
-from pact.capability import (
+from pact_passport import crypto
+from pact_passport.identity import Identity
+from pact_passport.capability import (
     issue_capability, attenuate, verify_capability, Caveat,
 )
-from pact.message import build_req, build_res, verify_message
-from pact.receipt import create_receipt, verify_receipt
-from pact.transport.server import PACTServer
-from pact.transport.client import send_message
+from pact_passport.message import build_req, build_res, verify_message
+from pact_passport.receipt import create_receipt, verify_receipt
+from pact_passport.transport.server import PACTServer
+from pact_passport.transport.client import send_message
 
 
 def test_three_agent_delegation(store):
@@ -54,7 +54,7 @@ def test_three_agent_delegation(store):
 
     # Alice's server processes Charlie's request
     def alice_dispatch(body):
-        from pact.message import PACTMessage, build_res
+        from pact_passport.message import PACTMessage, build_res
         msg = PACTMessage.from_dict(body)
         if msg.intent == "task":
             return build_res(
@@ -85,7 +85,7 @@ def test_three_agent_delegation(store):
         assert response["payload"]["data"] == "secret_value"
 
         # Verify response signature
-        from pact.message import PACTMessage
+        from pact_passport.message import PACTMessage
         res_msg = PACTMessage.from_dict(response)
         assert verify_message(res_msg, alice.public_key)
 

@@ -16,7 +16,7 @@ the first post-rotation REQ — that's the protocol contract.
 
 from __future__ import annotations
 
-from pact.message import build_req
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 
@@ -71,8 +71,8 @@ def test_rotation_without_continuity_proof_rejected(sandbox):
     next_key_digest history) cannot impersonate a rotated peer. The
     continuity check fails because the attacker's pubkey hash doesn't
     match the cached doc's next_key_digest."""
-    from pact.identity import Identity
-    from pact.store import PACTStore
+    from pact_passport.identity import Identity
+    from pact_passport.store import PACTStore
     from pathlib import Path
     import tempfile
 

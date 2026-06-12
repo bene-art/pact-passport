@@ -14,7 +14,7 @@ import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from collections.abc import Callable
 
-from pact._canonical import (
+from pact_passport._canonical import (
     encode_message, decode_message,
     JSON_CONTENT_TYPE, CBOR_CONTENT_TYPE,
 )

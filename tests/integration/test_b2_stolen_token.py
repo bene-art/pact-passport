@@ -30,8 +30,8 @@ import copy
 
 import pytest
 
-from pact import crypto
-from pact.message import build_req
+from pact_passport import crypto
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 
@@ -170,8 +170,8 @@ def test_b2_v3_holder_proof_over_wrong_nonce_rejected(sandbox, capsys):
 
     # But: build_req has already signed req_b with the holder_proof it
     # generated; substituting changes the signable bytes. Need to re-sign.
-    from pact._canonical import canonical_json
-    from pact.message import PACTMessage
+    from pact_passport._canonical import canonical_json
+    from pact_passport.message import PACTMessage
     req_b_msg = PACTMessage.from_dict(req_b_dict)
     req_b_msg.signature = ""
     sig = crypto.sign(canonical_json(req_b_msg.signable_dict()), bob_priv)
@@ -211,8 +211,8 @@ def test_b2_v4_holder_proof_garbage_bytes_rejected(sandbox, capsys):
     req_dict["holder_proof"] = base64.b64encode(b"\xde\xad\xbe\xef" * 16).decode()
 
     # Re-sign because we changed signable content
-    from pact._canonical import canonical_json
-    from pact.message import PACTMessage
+    from pact_passport._canonical import canonical_json
+    from pact_passport.message import PACTMessage
     msg = PACTMessage.from_dict(req_dict)
     msg.signature = ""
     sig = crypto.sign(canonical_json(msg.signable_dict()), bob_priv)

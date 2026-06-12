@@ -2,8 +2,8 @@
 
 Makes any local-agent-kit agent PACT-addressable with 3 lines:
 
-    from pact import PACTAgent
-    from pact.contrib.lak_channel import PACTChannel
+    from pact_passport import PACTAgent
+    from pact_passport.contrib.lak_channel import PACTChannel
 
     pact = PACTAgent("alice", capabilities=["ask_question"])
     channel = PACTChannel(pact)
@@ -37,8 +37,8 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-from pact.agent import PACTAgent
-from pact.message import PACTMessage, build_res
+from pact_passport.agent import PACTAgent
+from pact_passport.message import PACTMessage, build_res
 
 logger = logging.getLogger(__name__)
 

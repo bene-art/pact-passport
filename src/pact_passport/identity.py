@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import base64
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact.store import PACTStore
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport.store import PACTStore
 
 
 class Identity:

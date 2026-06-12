@@ -3,12 +3,12 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 
-from pact import crypto
-from pact.capability import (
+from pact_passport import crypto
+from pact_passport.capability import (
     Caveat, CapabilityToken, issue_capability, attenuate,
     verify_capability, DelegationLink,
 )
-from pact.errors import AttenuationViolation
+from pact_passport.errors import AttenuationViolation
 
 
 @pytest.fixture

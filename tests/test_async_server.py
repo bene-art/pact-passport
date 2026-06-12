@@ -3,7 +3,7 @@
 import json
 import urllib.request
 
-from pact.transport.async_server import AsyncPACTServer
+from pact_passport.transport.async_server import AsyncPACTServer
 
 
 def test_async_health():
@@ -58,7 +58,7 @@ def test_async_message_dispatch():
 
 def test_async_cbor_negotiation():
     """Async server supports CBOR content negotiation."""
-    from pact._canonical import canonical_cbor, decode_cbor, CBOR_CONTENT_TYPE
+    from pact_passport._canonical import canonical_cbor, decode_cbor, CBOR_CONTENT_TYPE
 
     server = AsyncPACTServer(
         port=0,

@@ -1,6 +1,6 @@
 """Tests for LAK channel integration (Phase 5)."""
 
-from pact.contrib.lak_channel import PACTChannel, _LAKMessage
+from pact_passport.contrib.lak_channel import PACTChannel, _LAKMessage
 
 
 def test_lak_message_creation():
@@ -12,7 +12,7 @@ def test_lak_message_creation():
 
 def test_pact_channel_init(store):
     """PACTChannel initializes with a PACTAgent."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     agent = PACTAgent("lak_test", store_dir=store.base, capabilities=["chat"])
     channel = PACTChannel(agent)

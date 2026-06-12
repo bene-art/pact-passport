@@ -12,13 +12,13 @@ import tempfile
 tmp = tempfile.mkdtemp(prefix="pact_demo_")
 os.environ["PACT_HOME"] = tmp
 
-from pact.identity import Identity
-from pact.capability import issue_capability, verify_capability, Caveat
-from pact.message import build_req, build_res, verify_message, verify_holder_proof
-from pact.receipt import create_receipt, verify_receipt
-from pact.store import PACTStore
-from pact.transport.server import PACTServer
-from pact.transport.client import send_message, fetch_identity
+from pact_passport.identity import Identity
+from pact_passport.capability import issue_capability, verify_capability, Caveat
+from pact_passport.message import build_req, build_res, verify_message, verify_holder_proof
+from pact_passport.receipt import create_receipt, verify_receipt
+from pact_passport.store import PACTStore
+from pact_passport.transport.server import PACTServer
+from pact_passport.transport.client import send_message, fetch_identity
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
     print("\n[3] Bob starts serving...")
 
     def bob_dispatch(body):
-        from pact.message import PACTMessage, build_res
+        from pact_passport.message import PACTMessage, build_res
         msg = PACTMessage.from_dict(body)
         if msg.intent == "identity":
             return build_res(bob._private_key, bob.agent_id, msg,
@@ -99,7 +99,7 @@ def main():
         print("\n[6] Sending REQ over HTTP...")
         response = send_message(base_url, req)
 
-        from pact.message import PACTMessage
+        from pact_passport.message import PACTMessage
         res_msg = PACTMessage.from_dict(response)
         print(f"  Status:  {res_msg.status}")
         print(f"  Payload: {res_msg.payload}")

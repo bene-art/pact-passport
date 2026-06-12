@@ -21,8 +21,8 @@ accepted, demonstrating the test machinery is sound.
 
 from __future__ import annotations
 
-from pact import crypto
-from pact.message import build_req
+from pact_passport import crypto
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 

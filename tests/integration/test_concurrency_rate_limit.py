@@ -13,8 +13,8 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from pact.capability import Caveat, issue_capability
-from pact.message import build_req
+from pact_passport.capability import Caveat, issue_capability
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 

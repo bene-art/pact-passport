@@ -5,9 +5,9 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from pact.store import PACTStore
-from pact.identity import Identity
-from pact import crypto
+from pact_passport.store import PACTStore
+from pact_passport.identity import Identity
+from pact_passport import crypto
 
 
 @pytest.fixture

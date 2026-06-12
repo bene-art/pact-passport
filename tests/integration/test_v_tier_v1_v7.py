@@ -24,15 +24,15 @@ from datetime import datetime, timedelta, UTC
 
 import pytest
 
-from pact import (
+from pact_passport import (
     HandlerCost,
     PACTAgent,
     PACTMessage,
     crypto,
 )
-from pact._canonical import canonical_json
-from pact.capability import CapabilityToken, Caveat, attenuate
-from pact.errors import AttenuationViolation
+from pact_passport._canonical import canonical_json
+from pact_passport.capability import CapabilityToken, Caveat, attenuate
+from pact_passport.errors import AttenuationViolation
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +185,7 @@ def test_v2_expired_visa_rejected(tmp_path, monkeypatch):
     stranger = Stranger()
 
     # Issue a visa with a 1-second expiry by injecting a custom policy.
-    from pact.visa import VisaContext, VisaGrant, Caveat as VisaCaveat
+    from pact_passport.visa import VisaContext, VisaGrant, Caveat as VisaCaveat
     short_expiry = (datetime.now(UTC) + timedelta(seconds=1)).isoformat()
     agent._custom_visa_policy = lambda ctx: VisaGrant(caveats=[
         VisaCaveat(restrict="expires", value=short_expiry),

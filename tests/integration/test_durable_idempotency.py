@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import json
 
-from pact.agent import PACTAgent
-from pact.identity import Identity
-from pact.message import build_req
-from pact.store import PACTStore
+from pact_passport.agent import PACTAgent
+from pact_passport.identity import Identity
+from pact_passport.message import build_req
+from pact_passport.store import PACTStore
 
 
 def test_idempotency_survives_restart(tmp_path):
@@ -84,7 +84,7 @@ def test_idempotency_survives_restart(tmp_path):
 
 def test_invocation_counts_survive_restart(tmp_path):
     """Cap invocation counters persist across agent restart."""
-    from pact.capability import Caveat, issue_capability
+    from pact_passport.capability import Caveat, issue_capability
 
     store_dir = tmp_path / "bob"
     sender_store = PACTStore(tmp_path / "sender")

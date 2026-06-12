@@ -1,6 +1,6 @@
 """Tests for crypto module."""
 
-from pact import crypto
+from pact_passport import crypto
 
 
 def test_generate_keypair():

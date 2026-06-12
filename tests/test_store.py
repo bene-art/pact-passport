@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from pact.store import PACTStore
+from pact_passport.store import PACTStore
 
 
 def test_save_load_private_key(tmp_pact_home):

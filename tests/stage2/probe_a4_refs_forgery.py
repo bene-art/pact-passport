@@ -16,7 +16,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from pact import build_req, issue_capability, send_message
+from pact_passport import build_req, issue_capability, send_message
 
 from tests.stage2._harness import (
     probe, stand_up_agent, cross_share_identities, teardown,

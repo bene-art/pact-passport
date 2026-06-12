@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 
-from pact.agent import PACTAgent
-from pact.transport.server import PACTServer
+from pact_passport.agent import PACTAgent
+from pact_passport.transport.server import PACTServer
 
 
 def _free_port() -> int:

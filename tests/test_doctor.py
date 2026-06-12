@@ -23,14 +23,14 @@ def test_doctor_healthy(tmp_pact_home):
 
     # Create agent
     result = subprocess.run(
-        [py, "-m", "pact.cli", "init", "healthy"],
+        [py, "-m", "pact_passport.cli", "init", "healthy"],
         env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0
 
     # Run doctor
     result = subprocess.run(
-        [py, "-m", "pact.cli", "doctor", "healthy"],
+        [py, "-m", "pact_passport.cli", "doctor", "healthy"],
         env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0
@@ -43,11 +43,11 @@ def test_doctor_after_rotation(tmp_pact_home):
     env = {**os.environ, "PACT_HOME": str(tmp_pact_home)}
     py = sys.executable or "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
 
-    subprocess.run([py, "-m", "pact.cli", "init", "rotated"], env=env, capture_output=True)
-    subprocess.run([py, "-m", "pact.cli", "rotate", "rotated"], env=env, capture_output=True)
+    subprocess.run([py, "-m", "pact_passport.cli", "init", "rotated"], env=env, capture_output=True)
+    subprocess.run([py, "-m", "pact_passport.cli", "rotate", "rotated"], env=env, capture_output=True)
 
     result = subprocess.run(
-        [py, "-m", "pact.cli", "doctor", "rotated"],
+        [py, "-m", "pact_passport.cli", "doctor", "rotated"],
         env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0
@@ -60,14 +60,14 @@ def test_doctor_bad_permissions(tmp_pact_home):
     env = {**os.environ, "PACT_HOME": str(tmp_pact_home)}
     py = sys.executable or "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
 
-    subprocess.run([py, "-m", "pact.cli", "init", "badperms"], env=env, capture_output=True)
+    subprocess.run([py, "-m", "pact_passport.cli", "init", "badperms"], env=env, capture_output=True)
 
     # Make key world-readable
     key_path = tmp_pact_home / "agents" / "badperms" / "private_key.bin"
     key_path.chmod(0o644)
 
     result = subprocess.run(
-        [py, "-m", "pact.cli", "doctor", "badperms"],
+        [py, "-m", "pact_passport.cli", "doctor", "badperms"],
         env=env, capture_output=True, text=True,
     )
     assert result.returncode == 1

@@ -18,24 +18,24 @@ from collections.abc import Callable, Iterator
 
 from zeroconf import Zeroconf
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact._chaos import chaos_sleep
-from pact.identity import Identity
-from pact.capability import CapabilityToken, Caveat, issue_capability, verify_capability
-from pact.message import (
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport._chaos import chaos_sleep
+from pact_passport.identity import Identity
+from pact_passport.capability import CapabilityToken, Caveat, issue_capability, verify_capability
+from pact_passport.message import (
     PACTMessage, build_req, build_res, build_res_chunk, verify_message,
     verify_holder_proof, is_deadline_exceeded,
 )
-from pact.errors import HandlerFailure
-from pact.receipt import create_receipt
-from pact.store import PACTStore
-from pact.transport.server import PACTServer
-from pact.transport.client import send_message, fetch_identity
-from pact.transport.discovery import (
+from pact_passport.errors import HandlerFailure
+from pact_passport.receipt import create_receipt
+from pact_passport.store import PACTStore
+from pact_passport.transport.server import PACTServer
+from pact_passport.transport.client import send_message, fetch_identity
+from pact_passport.transport.discovery import (
     register_agent, unregister_agent, discover_agents, resolve_agent,
 )
-from pact.visa import (
+from pact_passport.visa import (
     HandlerCost,
     ProtocolAdvertisement,
     VisaContext,

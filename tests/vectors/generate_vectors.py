@@ -14,8 +14,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from nacl.signing import SigningKey
-from pact import crypto
-from pact._canonical import canonical_json
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
 
 
 def keypair_from_seed(seed_hex: str) -> tuple[bytes, bytes]:

@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from pact.message import build_req
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 

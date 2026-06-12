@@ -11,8 +11,8 @@ import uuid
 from datetime import datetime, timedelta, UTC
 from dataclasses import dataclass, field
 
-from pact import crypto
-from pact._canonical import canonical_json
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
 
 
 @dataclass

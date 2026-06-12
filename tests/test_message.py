@@ -1,7 +1,7 @@
 """Tests for message module."""
 
-from pact import crypto
-from pact.message import (
+from pact_passport import crypto
+from pact_passport.message import (
     PACTMessage, build_req, build_res, verify_message,
     verify_holder_proof, is_deadline_exceeded,
 )

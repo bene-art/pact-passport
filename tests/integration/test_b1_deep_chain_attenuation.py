@@ -29,9 +29,9 @@ import copy
 
 import pytest
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact.capability import (
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport.capability import (
     AttenuationViolation,
     Caveat,
     CapabilityToken,

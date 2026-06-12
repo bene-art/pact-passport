@@ -17,7 +17,7 @@ from __future__ import annotations
 import sys
 import time
 
-from pact.message import build_req
+from pact_passport.message import build_req
 
 from tests.integration.conftest import post_message
 

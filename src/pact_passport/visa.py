@@ -35,9 +35,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, UTC
 from typing import Callable
 
-from pact import crypto
-from pact._canonical import canonical_json
-from pact.capability import CapabilityToken, Caveat
+from pact_passport import crypto
+from pact_passport._canonical import canonical_json
+from pact_passport.capability import CapabilityToken, Caveat
 
 
 # §4 default-policy ceilings — see ``g4 revision visa tiered trust.md``.

@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import pytest
 
-from pact import crypto
-from pact.capability import Caveat, attenuate, issue_capability
-from pact.identity import Identity
-from pact.message import build_req
-from pact.store import PACTStore
+from pact_passport import crypto
+from pact_passport.capability import Caveat, attenuate, issue_capability
+from pact_passport.identity import Identity
+from pact_passport.message import build_req
+from pact_passport.store import PACTStore
 
 from tests.integration.conftest import post_message
 

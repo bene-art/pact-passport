@@ -3,14 +3,14 @@
 import json
 import urllib.request
 
-from pact._canonical import (
+from pact_passport._canonical import (
     canonical_cbor, decode_cbor, encode_message, decode_message,
     JSON_CONTENT_TYPE, CBOR_CONTENT_TYPE,
 )
-from pact.transport.server import PACTServer
-from pact.transport.client import send_message
-from pact.identity import Identity
-from pact.message import build_req
+from pact_passport.transport.server import PACTServer
+from pact_passport.transport.client import send_message
+from pact_passport.identity import Identity
+from pact_passport.message import build_req
 
 
 def test_canonical_cbor_round_trip():
@@ -105,7 +105,7 @@ def test_client_cbor_round_trip(store):
     bob = Identity.create("bob_cbor", store)
 
     def dispatch(body):
-        from pact.message import PACTMessage, build_res
+        from pact_passport.message import PACTMessage, build_res
         msg = PACTMessage.from_dict(body)
         return build_res(
             bob._private_key, bob.agent_id, msg,

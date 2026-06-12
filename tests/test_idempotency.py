@@ -1,9 +1,9 @@
 """Tests for idempotency cache and DAG traversal (Phase 2)."""
 
-from pact.identity import Identity
-from pact.message import build_req, build_res
-from pact.transport.server import PACTServer
-from pact.transport.client import send_message
+from pact_passport.identity import Identity
+from pact_passport.message import build_req, build_res
+from pact_passport.transport.server import PACTServer
+from pact_passport.transport.client import send_message
 
 
 def test_idempotency_returns_cached(store):
@@ -15,7 +15,7 @@ def test_idempotency_returns_cached(store):
 
     def bob_dispatch(body):
         nonlocal call_count
-        from pact.message import PACTMessage, build_res
+        from pact_passport.message import PACTMessage, build_res
         msg = PACTMessage.from_dict(body)
 
         if msg.intent == "task":
@@ -55,7 +55,7 @@ def test_idempotency_returns_cached(store):
 
 def test_agent_idempotency(store):
     """PACTAgent-level idempotency cache returns same response."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     alice = Identity.create("alice_idem", store)
 
@@ -70,7 +70,7 @@ def test_agent_idempotency(store):
         return {"calls": handler_calls}
 
     # Simulate dispatch twice with same idempotency key
-    from pact.message import PACTMessage
+    from pact_passport.message import PACTMessage
     import uuid
     from datetime import datetime, timezone, timedelta
 
@@ -79,7 +79,7 @@ def test_agent_idempotency(store):
     agent._store.save_peer(alice.agent_id, alice.to_identity_document())
 
     # Use a properly signed REQ instead of skipping verification.
-    from pact.message import build_req
+    from pact_passport.message import build_req
     req = build_req(
         from_private_key=alice._private_key,
         from_id=alice.agent_id,
@@ -100,7 +100,7 @@ def test_agent_idempotency(store):
 
 def test_causal_chain(store):
     """get_causal_chain walks refs backwards."""
-    from pact.agent import PACTAgent
+    from pact_passport.agent import PACTAgent
 
     agent = PACTAgent("chain_test", store_dir=store.base)
 
