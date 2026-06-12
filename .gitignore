@@ -12,3 +12,7 @@ venv/
 htmlcov/
 *.so
 .env
+
+# Stage 2 probe result JSON dirs — provenance-stamped, may include local
+# hostnames; never commit. Each probe run creates results_<UTC-ts>/.
+tests/stage2/results_*/

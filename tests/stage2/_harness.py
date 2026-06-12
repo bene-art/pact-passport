@@ -17,7 +17,10 @@ self-describing.
 from __future__ import annotations
 
 import json
+import platform
 import socket
+import subprocess
+import sys
 import time
 import traceback
 from datetime import UTC, datetime
@@ -45,6 +48,41 @@ def _ensure_run_dir() -> Path:
     """
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     return RUN_DIR
+
+
+# ---------------------------------------------------------------------------
+# Provenance — C3-c per Stage 2 Change Plan §3 / RESEARCH Appendix C.
+# Stamped into every result JSON so a Stage 2 run is reproducible: same
+# git SHA + same Python on the same OS + same model digests reproduces
+# the same observations.
+# ---------------------------------------------------------------------------
+
+def _collect_provenance() -> dict[str, Any]:
+    """Capture the host's stable identity at harness-load time.
+
+    Per-probe runtime info (model_digests, trial_index, n_trials) is
+    layered on top by the probe wrapper / probe body.
+    """
+    try:
+        git_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=2.0,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        git_sha = "unknown"
+    return {
+        "git_sha": git_sha,
+        "host": socket.gethostname(),
+        "os": platform.platform(),
+        "python": platform.python_version(),
+    }
+
+
+_PROVENANCE = _collect_provenance()
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +117,20 @@ def probe(
                 "pre_registered_prediction": prediction,
                 "failure_threshold": threshold,
                 "citation": citation,
+                # C3-c provenance — stamped per result so a run is
+                # reproducible at this exact (host, sha, python, OS).
+                "provenance": dict(_PROVENANCE),
+                # Per-probe LLM model digests — probes that call into
+                # an adversary or handler LLM populate this with the
+                # resolved digest(s) (e.g. "gemma3:e4b@sha256:...").
+                # Empty dict for purely-deterministic probes.
+                "model_digests": {},
+                # N-trial scaffolding for stochastic probes.
+                # Probe DET/STOCH classification + N-trial loop wiring
+                # land in a follow-up commit; for now every probe is
+                # an N=1 single trial.
+                "trial_index": 0,
+                "n_trials": 1,
                 "receipts": [],
                 "observations": {},
                 "outcome": None,
