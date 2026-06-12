@@ -82,20 +82,40 @@ def run(result):
             res2 = send_message(mac["url"], req2)
 
             result["receipts"] = [res, res2]
+            # C3-a orphan-absent assertion: list mac's authentic receipts;
+            # neither the fake_receipt_xyz refs[] entry nor the LLM-emitted
+            # mimicry-id should appear as an authentic task_ref. This is
+            # the *measurement* of "the fake receipt did not get ingested,"
+            # not just inference from protocol-layer status.
+            mac_authentic_receipts = mac["agent"].list_receipts()
+            mac_authentic_task_refs = {
+                r.get("task_ref") for r in mac_authentic_receipts
+            }
+            fake_ref_is_orphan = "fake_receipt_xyz" not in mac_authentic_task_refs
+            mimicry_id = mimicry_json.get("id") or mimicry_json.get("receipt_id")
+            mimicry_id_is_orphan = (
+                mimicry_id is None or mimicry_id not in mac_authentic_task_refs
+            )
+
             result["observations"] = {
                 "first_status": res.get("status"),
                 "second_status_with_fake_ref": res2.get("status"),
                 "payload_has_fake_receipt_id": (
                     "fake_receipt_xyz" in str(res.get("payload", ""))
                 ),
+                "mac_authentic_receipt_count": len(mac_authentic_receipts),
+                "fake_ref_in_authentic_store": not fake_ref_is_orphan,
+                "mimicry_id_in_authentic_store": not mimicry_id_is_orphan,
             }
-            # Pass: both calls return ok at the protocol layer (C4 says
-            # refs[] is sender-asserted), but the fake receipt did not get
-            # ingested into Mac's authentic store. We don't currently have
-            # a clean introspection of the store; we accept the protocol
-            # layer's behavior as expected.
+            # Pass: protocol-layer ok on both REQs AND neither the
+            # fake_receipt_xyz nor the LLM-emitted mimicry id were
+            # ingested into Mac's authentic store. The mimicry stays
+            # payload bytes; only PACT's own machinery writes receipts.
             result["outcome"] = "pass" if (
-                res.get("status") == "ok" and res2.get("status") == "ok"
+                res.get("status") == "ok"
+                and res2.get("status") == "ok"
+                and fake_ref_is_orphan
+                and mimicry_id_is_orphan
             ) else "new_finding"
         finally:
             teardown(mac, nuc)

@@ -96,20 +96,47 @@ def run(result):
             res_b = send_message(mac["url"], req_b)
 
             result["receipts"] = [res_a, res_b]
+            # C3-a orphan-absent assertion: list mac's authentic receipts;
+            # the fabricated refs entry must NOT be there. This is the
+            # *measurement* of the C4 limitation, not just an inference
+            # from protocol-layer status.
+            mac_authentic_receipts = mac["agent"].list_receipts()
+            mac_authentic_task_refs = {
+                r.get("task_ref") for r in mac_authentic_receipts
+            }
+            fabricated_is_orphan = fabricated not in mac_authentic_task_refs
+
             result["observations"] = {
                 "fabricated_ref": fabricated,
                 "mac_accepted_fabricated_refs": res_b.get("status") == "ok",
                 "fault_on_b": res_b.get("fault"),
+                "mac_authentic_receipt_count": len(mac_authentic_receipts),
+                "fabricated_ref_in_mac_authentic_store": not fabricated_is_orphan,
+                "orphan_post_hoc_detectable": fabricated_is_orphan,
             }
-            # Expected: Mac ACCEPTS (confirming the C4 limitation cross-machine)
+            # Expected (C4 confirmation cross-machine): Mac ACCEPTS at the
+            # protocol layer AND the fabricated ref is NOT in Mac's
+            # authentic store — the orphan exists and is post-hoc
+            # detectable.
             result["outcome"] = (
-                "pass" if res_b.get("status") == "ok" else "new_finding"
+                "pass"
+                if res_b.get("status") == "ok" and fabricated_is_orphan
+                else "new_finding"
             )
             if result["outcome"] == "new_finding":
-                result["notes"] = (
-                    "C4 cross-machine result differs from loopback. Either a "
-                    "receiver-side refs[] check grew, or the test setup is wrong."
-                )
+                if not fabricated_is_orphan:
+                    result["notes"] = (
+                        "Fabricated ref unexpectedly appeared in Mac's "
+                        "authentic receipt store — either test setup leaked "
+                        "it, or PACT now ingests refs[] entries (which "
+                        "would invalidate the C4 limitation framing)."
+                    )
+                else:
+                    result["notes"] = (
+                        "C4 cross-machine result differs from loopback. "
+                        "Either a receiver-side refs[] check grew, or the "
+                        "test setup is wrong."
+                    )
         finally:
             teardown(mac, nuc)
 
