@@ -59,6 +59,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "causes the receiver to fault."
     ),
     citation="§16.5 + acceptance test 6.2 (variants).",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     variants = ADVERSARIAL_PROMPTS["P2_uri_variants"]

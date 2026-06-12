@@ -41,6 +41,8 @@ PASS_CEILING_S = 454           # 2× baseline
         "step's status != 'ok' (functional regression)."
     ),
     citation="v0.1.3 case study Demo §3 three-step round-trip.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

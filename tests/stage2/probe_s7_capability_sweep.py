@@ -79,6 +79,8 @@ def _call_adversary(model: str, kind: str, prompt: str) -> str:
         "regression — the most-interesting positive finding."
     ),
     citation="Greshake 2023; Tomašev §4.9; SoK §3.1 + 2026 frontier surveys.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     sweep_results = []

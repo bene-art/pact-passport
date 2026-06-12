@@ -41,6 +41,8 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
         "on the LLM-emitted advertisement-shaped JSON in the payload."
     ),
     citation="§16.5 protocol_advertisement MUST-NOT-consume.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

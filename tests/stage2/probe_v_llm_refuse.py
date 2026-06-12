@@ -46,6 +46,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
     prediction="Visa REFUSED with structured refusal (status='error', fault.code mentions idempotency).",
     threshold="Visa GRANTED for non-idempotent handler — default policy regression.",
     citation="Default V-tier policy + HandlerCost(idempotent=False).",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

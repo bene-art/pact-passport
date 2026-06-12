@@ -46,6 +46,8 @@ REPO = Path(__file__).resolve().parents[2]  # tests/stage2/ → tests/ → repo 
         "Tier C runs)."
     ),
     citation="Methodology self-test; analogue of mutation testing in spec.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     plan = [

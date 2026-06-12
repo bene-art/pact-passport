@@ -58,6 +58,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "incomplete — receipt-fidelity regression."
     ),
     citation="test_v_tier_v1_v7.py V3 receipt-fidelity probe.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

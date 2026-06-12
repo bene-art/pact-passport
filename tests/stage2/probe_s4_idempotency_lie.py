@@ -41,6 +41,8 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
         "rejects subsequent calls on a heuristic that wasn't spec'd."
     ),
     citation="Spec §14.5 cost-honesty; idempotency cache (Bug 1 fix).",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

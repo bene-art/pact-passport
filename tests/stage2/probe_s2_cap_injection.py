@@ -39,6 +39,8 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
         "trace, OR any side effect attributable to the LLM-emitted JSON."
     ),
     citation="Macaroons §III + spec §6 cap-token wire-shape.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

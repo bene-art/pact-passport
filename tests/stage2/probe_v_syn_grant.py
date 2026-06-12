@@ -52,6 +52,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "regression) OR caveats absent / unbounded (default ceiling regression)."
     ),
     citation="Default V-tier policy + spec §14 visa-grant shape.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

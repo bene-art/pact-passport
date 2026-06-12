@@ -60,6 +60,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "Bug 10 class: handler-to-policy backflow."
     ),
     citation="Tomašev §4.9; SoK §3.1; Greshake 2023.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

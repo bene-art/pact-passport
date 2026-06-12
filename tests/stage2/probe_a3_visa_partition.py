@@ -56,6 +56,8 @@ def _partition_window():
         "minted-but-undelivered state visibility."
     ),
     citation="Composes Bug 7 (cancelled receipt) with V-tier rate tracking.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

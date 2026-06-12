@@ -44,6 +44,8 @@ from tests.stage2._harness import (
         "(in which case the §6 paper sentence is wrong and must be revised)."
     ),
     citation="Lamport 1978; Auvolat TCS 2021; experiments_2026-06-08.md E7.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

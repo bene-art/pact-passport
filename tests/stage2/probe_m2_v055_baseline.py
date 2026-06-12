@@ -57,6 +57,8 @@ BUGS_CLOSED_AFTER_V055 = [
         "(probe has bleed between bugs)."
     ),
     citation="Methodology self-test; cross-version regression detection.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     v055_tag = subprocess.run(

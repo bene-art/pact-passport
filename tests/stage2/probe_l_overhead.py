@@ -61,6 +61,8 @@ def _make_l_probe(pair_idx, scenario_idx):
             "(suggesting an internal lock contention regression)."
         ),
         citation="§3 substrate-overhead chart; v0.1.3 case study baseline 227s.",
+    classification="DETERMINISTIC",
+    n_trials=1,
     )
     def _probe(result):
         with tempfile.TemporaryDirectory() as tmp:

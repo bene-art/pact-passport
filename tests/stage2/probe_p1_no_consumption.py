@@ -58,6 +58,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "advertisement consumption."
     ),
     citation="§16.5 MUST-NOT; visa_protocol_advertisement_design.md §6.4.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

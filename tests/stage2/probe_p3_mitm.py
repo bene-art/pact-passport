@@ -65,6 +65,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "advertisement despite signature failure."
     ),
     citation="§16.5 + spec §2 outer envelope canonical signature.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

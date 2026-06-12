@@ -96,6 +96,8 @@ def probe(
     prediction: str,
     threshold: str,
     citation: str = "",
+    classification: str = "DETERMINISTIC",
+    n_trials: int = 1,
 ) -> Callable:
     """Wrap a probe body. Captures pre-registration + outcome + receipts.
 
@@ -103,9 +105,32 @@ def probe(
     By contract the probe body MUST set `result["outcome"]` to one of:
       "pass", "new_finding", "regression", "harness_error".
 
+    Per RESEARCH plan §6 / §5.3, every probe is explicitly classified:
+
+      - "DETERMINISTIC"  — a signature verifies or it does not. N=1 is a
+        proof-by-execution counterexample test; single run suffices.
+        Examples: protocol-mechanics probes (A4, A5, B*, C-convergence,
+        R1, S2/S3/S5 structural).
+
+      - "STOCHASTIC"  — LLM adversary or LLM handler in the loop; single
+        runs are scientifically invalid. Need N≥30 trials per cell as a
+        default (enables a normal-approx CI); N≥100 for cells whose
+        observed violation rate falls in (0, 0.1). Examples: A1, A2, A6,
+        S1/S4/S6/S7, V-probes, P4.
+
+    `n_trials` defaults to 1 (the DET counterexample shape). STOCH probes
+    declare `n_trials=30` (or higher). The N-trial *loop* (wrap fn in a
+    loop, emit one JSON per trial + aggregate Wilson CI) lands in a
+    follow-up commit; this commit pre-registers the discipline.
+
     The wrapper writes `<probe_id>.json` to `RUN_DIR` on exit (even on
     exception).
     """
+    if classification not in ("DETERMINISTIC", "STOCHASTIC"):
+        raise ValueError(
+            f"probe '{probe_id}': classification must be "
+            f"'DETERMINISTIC' or 'STOCHASTIC', got {classification!r}"
+        )
     def decorator(fn: Callable) -> Callable:
         def wrapper(*args, **kwargs) -> dict:
             t0 = time.time()
@@ -117,6 +142,8 @@ def probe(
                 "pre_registered_prediction": prediction,
                 "failure_threshold": threshold,
                 "citation": citation,
+                # Pre-registered classification per RESEARCH §5.3.
+                "classification": classification,
                 # C3-c provenance — stamped per result so a run is
                 # reproducible at this exact (host, sha, python, OS).
                 "provenance": dict(_PROVENANCE),
@@ -125,12 +152,12 @@ def probe(
                 # resolved digest(s) (e.g. "gemma3:e4b@sha256:...").
                 # Empty dict for purely-deterministic probes.
                 "model_digests": {},
-                # N-trial scaffolding for stochastic probes.
-                # Probe DET/STOCH classification + N-trial loop wiring
-                # land in a follow-up commit; for now every probe is
-                # an N=1 single trial.
+                # N-trial scaffolding. DET defaults to 1 (counterexample
+                # logic); STOCH probes declare N≥30. The actual N-trial
+                # loop (wrap fn in for-range + Wilson CI aggregate) is
+                # follow-up; this commit pre-registers the per-probe N.
                 "trial_index": 0,
-                "n_trials": 1,
+                "n_trials": n_trials,
                 "receipts": [],
                 "observations": {},
                 "outcome": None,

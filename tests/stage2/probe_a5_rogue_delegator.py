@@ -44,6 +44,8 @@ from tests.stage2._harness import (
         "can't fire without keys)."
     ),
     citation="Bug 5 (v0.2.0); Bug 9 (v0.7); Macaroons §III chain.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

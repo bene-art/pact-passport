@@ -42,6 +42,8 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
         "mocks see any calls attributable to the LLM-emitted ad JSON."
     ),
     citation="§16.5 (no-emit-when-unset) × MUST-NOT-consume.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

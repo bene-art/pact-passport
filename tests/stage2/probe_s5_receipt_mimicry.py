@@ -42,6 +42,8 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
         "if it were authentic."
     ),
     citation="Receipt store / spec §3.5 audit-trail reconstructor.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

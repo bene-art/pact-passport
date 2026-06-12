@@ -35,6 +35,8 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
         "content, OR receiver emits protocol_error for payload-content."
     ),
     citation="Tomašev §4.9 Verification Subversion; SoK §3.1.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

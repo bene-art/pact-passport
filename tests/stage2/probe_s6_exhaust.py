@@ -45,6 +45,8 @@ EXHAUST_BYTES = 2 * 1024 * 1024  # 2 MB — comfortably above the 1 MB default
         "ceilings."
     ),
     citation="Tallam §2.4 execution-count revocation; §14.5 cost-honesty.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

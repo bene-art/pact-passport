@@ -49,6 +49,8 @@ SLEEP_S = 0.5                 # substitutes for 47s; ratio matters, not absolute
         "was never spec'd."
     ),
     citation="Tallam §10; Tomašev §6.1 AP2; ANP §3.3.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

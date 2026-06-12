@@ -61,6 +61,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
         "tracking (counter increment ordering broken)."
     ),
     citation="Composes V-tier rate window with handler-pacing realism.",
+    classification="STOCHASTIC",
+    n_trials=30,
 )
 def run(result):
     with tempfile.TemporaryDirectory() as tmp:

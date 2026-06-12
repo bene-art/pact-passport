@@ -52,6 +52,8 @@ _PAIRING = {
     prediction="Concurrent requests sharing an idempotency_key produce ONE handler invocation; the second call returns the cached response.",
     threshold="Handler is invoked twice → Bug 1 regression.",
     citation="Bug 1 (v0.3); idempotency cache.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C1(result):
     with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +111,8 @@ def C1(result):
     prediction="Payload containing CRLF round-trips intact; signature verifies.",
     threshold="CRLF mangled or signature fails on CRLF-bearing payload — Bug 2 regression.",
     citation="Bug 2 (v0.3); HTTP CRLF encoding.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C2(result):
     with tempfile.TemporaryDirectory() as tmp:
@@ -228,6 +232,8 @@ def C4(result):
     prediction="Verifier fail-closes when an intermediate delegator's public key is missing from known_keys.",
     threshold="Verifier returns OK without the key — Bug 5 regression.",
     citation="Bug 5 (v0.2.0); fail-closed verifier.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C5(result):
     with tempfile.TemporaryDirectory() as tmp:
@@ -269,6 +275,8 @@ def C5(result):
     prediction="DelegationLink chain links carry parent_cap_id; verifier walks the chain link-by-link with the spec'd contract.",
     threshold="Verifier accepts a chain with mutated parent_cap_id — Bug 6 regression.",
     citation="Bug 6 (v0.6); spec §14.8 + v1.3 amendments.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C6(result):
     with tempfile.TemporaryDirectory() as tmp:
@@ -314,6 +322,8 @@ def C6(result):
     prediction="A stream interrupted by BrokenPipeError emits a cancellation receipt with a categorized fault.",
     threshold="No cancellation receipt OR silent chunk drop — Bug 7 regression.",
     citation="Bug 7 (v0.6); spec §14.9 + v1.3 §16.2.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C7(result):
     result["observations"] = {
@@ -338,6 +348,8 @@ def C7(result):
     prediction="ctx.cap_token is bound BEFORE the rate-limit check — Bug 8 fix preserved.",
     threshold="Rate-limit decision before cap_token binding — Bug 8 regression.",
     citation="Bug 8 (v0.6.1); V-tier dispatch ordering.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C8(result):
     # Static + behavioral check. Bug 8 was about ctx-binding ordering inside
@@ -378,6 +390,8 @@ def C8(result):
     prediction="Mutating action_at_step or caveats_at_step in a chain link causes verifier to fail-close — Bug 9 fix preserved.",
     threshold="Verifier accepts mutated action/caveats — Bug 9 regression.",
     citation="Bug 9 (v0.7); Macaroons §III chain re-derivation.",
+    classification="DETERMINISTIC",
+    n_trials=1,
 )
 def C9(result):
     with tempfile.TemporaryDirectory() as tmp:
