@@ -86,8 +86,91 @@ _PROVENANCE = _collect_provenance()
 
 
 # ---------------------------------------------------------------------------
+# Statistics — Wilson score interval for binomial proportions.
+# RESEARCH §6.2: "Report Wilson score intervals for binomial violation
+# rates (better than normal approx near 0/1, which is exactly where
+# protocol-layer rates will live)." Rolled by hand so the harness has
+# zero extra dependencies (scipy not installed in the v0.7.x line).
+# ---------------------------------------------------------------------------
+
+WILSON_Z_95 = 1.959963984540054  # two-sided 95% CI
+
+
+def wilson_ci(violations: int, n: int, z: float = WILSON_Z_95) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion.
+
+    Args:
+        violations: number of "violation" outcomes observed.
+        n: number of trials (excluding harness_error trials).
+        z: standard-normal quantile for the desired two-sided CI level
+           (default 1.96 ≈ 95%).
+
+    Returns:
+        (low, high) tuple, both in [0, 1]. Both are 0.0 when n == 0
+        (no information; the caller should treat the CI as undefined).
+    """
+    if n <= 0:
+        return (0.0, 0.0)
+    p_hat = violations / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p_hat + z2 / (2 * n)) / denom
+    margin = z * ((p_hat * (1 - p_hat) / n + z2 / (4 * n * n)) ** 0.5) / denom
+    return (max(0.0, center - margin), min(1.0, center + margin))
+
+
+# ---------------------------------------------------------------------------
 # Probe decorator
 # ---------------------------------------------------------------------------
+
+# Outcomes counted as "violations" for STOCH probe rate computation.
+# `harness_error` is excluded (instrumentation issue, not a protocol obs).
+_VIOLATION_OUTCOMES = ("new_finding", "regression")
+
+
+def _new_result(probe_id, tier, pairing, prediction, threshold, citation,
+                classification, n_trials, trial_index) -> dict[str, Any]:
+    """Fresh per-trial result skeleton with all pre-registration fields."""
+    return {
+        "probe_id": probe_id,
+        "tier": tier,
+        "started_at_utc": datetime.now(UTC).isoformat(),
+        "pairing": pairing,
+        "pre_registered_prediction": prediction,
+        "failure_threshold": threshold,
+        "citation": citation,
+        "classification": classification,
+        "provenance": dict(_PROVENANCE),
+        # Per-probe LLM model digests — probes that call into an
+        # adversary or handler LLM populate this with the resolved
+        # digest(s) (e.g. "gemma3:e4b@sha256:..."). Empty dict for
+        # purely-deterministic probes.
+        "model_digests": {},
+        "trial_index": trial_index,
+        "n_trials": n_trials,
+        "receipts": [],
+        "observations": {},
+        "outcome": None,
+        "elapsed_s": None,
+        "notes": "",
+    }
+
+
+def _run_one_trial(fn, result, args, kwargs) -> None:
+    """Execute the probe body once, mutating `result` in place."""
+    t0 = time.time()
+    try:
+        fn(result, *args, **kwargs)
+        if result["outcome"] is None:
+            result["outcome"] = "harness_error"
+            result["notes"] = "probe body did not set result['outcome']"
+    except Exception as e:
+        result["outcome"] = "harness_error"
+        result["notes"] = (
+            f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+        )
+    result["elapsed_s"] = round(time.time() - t0, 3)
+
 
 def probe(
     probe_id: str,
@@ -110,77 +193,134 @@ def probe(
       - "DETERMINISTIC"  — a signature verifies or it does not. N=1 is a
         proof-by-execution counterexample test; single run suffices.
         Examples: protocol-mechanics probes (A4, A5, B*, C-convergence,
-        R1, S2/S3/S5 structural).
+        R1, S2/S3/S5 structural). Writes one `<probe_id>.json`.
 
-      - "STOCHASTIC"  — LLM adversary or LLM handler in the loop; single
-        runs are scientifically invalid. Need N≥30 trials per cell as a
-        default (enables a normal-approx CI); N≥100 for cells whose
-        observed violation rate falls in (0, 0.1). Examples: A1, A2, A6,
-        S1/S4/S6/S7, V-probes, P4.
+      - "STOCHASTIC" with n_trials > 1 — LLM adversary or LLM handler
+        in the loop; single runs are scientifically invalid. Loops N
+        times, writes one `<probe_id>_trial_<i>.json` per trial, plus
+        an aggregate `<probe_id>.json` with violation rate + Wilson 95%
+        CI (RESEARCH §6.2). Outcomes `new_finding` and `regression`
+        count as violations; `harness_error` is excluded from the rate
+        (instrumentation issue, not a protocol observation). N=30 by
+        default; raise to N=100 for cells where the observed rate
+        falls in (0, 0.1) — that's exactly where the normal approx
+        breaks down and Wilson earns its keep.
 
-    `n_trials` defaults to 1 (the DET counterexample shape). STOCH probes
-    declare `n_trials=30` (or higher). The N-trial *loop* (wrap fn in a
-    loop, emit one JSON per trial + aggregate Wilson CI) lands in a
-    follow-up commit; this commit pre-registers the discipline.
+    The aggregate JSON additionally records:
+      - `aggregate.n` — trials excluding harness_errors
+      - `aggregate.violations` — count of new_finding + regression
+      - `aggregate.rate` — violations / n
+      - `aggregate.wilson_low`, `wilson_high` — 95% CI bounds
+      - `aggregate.harness_errors` — excluded trial count
+      - `aggregate.outcomes` — full per-trial outcome tally
+      - `aggregate.elapsed_s_total` — wall-clock for the loop
 
-    The wrapper writes `<probe_id>.json` to `RUN_DIR` on exit (even on
-    exception).
+    STOCH with n_trials == 1 (unusual but allowed) takes the
+    single-trial path so the aggregate machinery doesn't add noise to
+    a one-shot run.
     """
     if classification not in ("DETERMINISTIC", "STOCHASTIC"):
         raise ValueError(
             f"probe '{probe_id}': classification must be "
             f"'DETERMINISTIC' or 'STOCHASTIC', got {classification!r}"
         )
+    if n_trials < 1:
+        raise ValueError(
+            f"probe '{probe_id}': n_trials must be >= 1, got {n_trials}"
+        )
+
+    multi_trial = classification == "STOCHASTIC" and n_trials > 1
+
     def decorator(fn: Callable) -> Callable:
         def wrapper(*args, **kwargs) -> dict:
-            t0 = time.time()
-            result: dict[str, Any] = {
-                "probe_id": probe_id,
-                "tier": tier,
-                "started_at_utc": datetime.now(UTC).isoformat(),
-                "pairing": pairing,
-                "pre_registered_prediction": prediction,
-                "failure_threshold": threshold,
-                "citation": citation,
-                # Pre-registered classification per RESEARCH §5.3.
-                "classification": classification,
-                # C3-c provenance — stamped per result so a run is
-                # reproducible at this exact (host, sha, python, OS).
-                "provenance": dict(_PROVENANCE),
-                # Per-probe LLM model digests — probes that call into
-                # an adversary or handler LLM populate this with the
-                # resolved digest(s) (e.g. "gemma3:e4b@sha256:...").
-                # Empty dict for purely-deterministic probes.
-                "model_digests": {},
-                # N-trial scaffolding. DET defaults to 1 (counterexample
-                # logic); STOCH probes declare N≥30. The actual N-trial
-                # loop (wrap fn in for-range + Wilson CI aggregate) is
-                # follow-up; this commit pre-registers the per-probe N.
-                "trial_index": 0,
-                "n_trials": n_trials,
-                "receipts": [],
-                "observations": {},
-                "outcome": None,
-                "elapsed_s": None,
-                "notes": "",
-            }
-            try:
-                fn(result, *args, **kwargs)
-                if result["outcome"] is None:
-                    result["outcome"] = "harness_error"
-                    result["notes"] = (
-                        "probe body did not set result['outcome']"
-                    )
-            except Exception as e:
-                result["outcome"] = "harness_error"
-                result["notes"] = (
-                    f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+            run_dir = _ensure_run_dir()
+
+            # --- Single-trial path (DET, or STOCH-n_trials=1) ---
+            if not multi_trial:
+                result = _new_result(
+                    probe_id, tier, pairing, prediction, threshold,
+                    citation, classification, n_trials, trial_index=0,
                 )
-            result["elapsed_s"] = round(time.time() - t0, 3)
-            (_ensure_run_dir() / f"{probe_id}.json").write_text(
-                json.dumps(result, indent=2, default=str)
+                _run_one_trial(fn, result, args, kwargs)
+                (run_dir / f"{probe_id}.json").write_text(
+                    json.dumps(result, indent=2, default=str)
+                )
+                return result
+
+            # --- Multi-trial path (STOCH with n_trials > 1) ---
+            t_loop_start = time.time()
+            trial_results: list[dict] = []
+            for i in range(n_trials):
+                tr = _new_result(
+                    probe_id, tier, pairing, prediction, threshold,
+                    citation, classification, n_trials, trial_index=i,
+                )
+                _run_one_trial(fn, tr, args, kwargs)
+                (run_dir / f"{probe_id}_trial_{i:03d}.json").write_text(
+                    json.dumps(tr, indent=2, default=str)
+                )
+                trial_results.append(tr)
+            loop_elapsed = round(time.time() - t_loop_start, 3)
+
+            # Tally outcomes.
+            outcome_tally: dict[str, int] = {}
+            for tr in trial_results:
+                key = tr["outcome"] or "harness_error"
+                outcome_tally[key] = outcome_tally.get(key, 0) + 1
+            harness_errors = outcome_tally.get("harness_error", 0)
+            countable_n = n_trials - harness_errors
+            violations = sum(
+                outcome_tally.get(o, 0) for o in _VIOLATION_OUTCOMES
             )
-            return result
+            rate = (violations / countable_n) if countable_n > 0 else None
+            wilson_low, wilson_high = (
+                wilson_ci(violations, countable_n)
+                if countable_n > 0 else (None, None)
+            )
+
+            # The aggregate's outcome is a verdict-on-the-batch, distinct
+            # from per-trial outcomes:
+            #   - "pass":         no violations observed (Wilson upper bound
+            #                     bounds the residual risk; the paper quotes it)
+            #   - "new_finding":  at least one violation observed
+            #   - "harness_error": all trials harness-errored (no data)
+            if countable_n == 0:
+                aggregate_outcome = "harness_error"
+            elif violations == 0:
+                aggregate_outcome = "pass"
+            else:
+                aggregate_outcome = "new_finding"
+
+            aggregate = _new_result(
+                probe_id, tier, pairing, prediction, threshold,
+                citation, classification, n_trials, trial_index=-1,
+            )
+            aggregate["aggregate"] = {
+                "n": countable_n,
+                "violations": violations,
+                "rate": rate,
+                "wilson_z": WILSON_Z_95,
+                "wilson_low": wilson_low,
+                "wilson_high": wilson_high,
+                "harness_errors": harness_errors,
+                "outcomes": outcome_tally,
+                "elapsed_s_total": loop_elapsed,
+                "per_trial_files": [
+                    f"{probe_id}_trial_{i:03d}.json" for i in range(n_trials)
+                ],
+            }
+            aggregate["outcome"] = aggregate_outcome
+            aggregate["elapsed_s"] = loop_elapsed
+            aggregate["notes"] = (
+                f"STOCHASTIC aggregate over {n_trials} trials "
+                f"(excl. {harness_errors} harness_error). See per-trial "
+                f"files for individual receipts + observations."
+            )
+            (run_dir / f"{probe_id}.json").write_text(
+                json.dumps(aggregate, indent=2, default=str)
+            )
+            return aggregate
+
         wrapper.__wrapped__ = fn  # type: ignore[attr-defined]
         wrapper.probe_id = probe_id  # type: ignore[attr-defined]
         return wrapper
