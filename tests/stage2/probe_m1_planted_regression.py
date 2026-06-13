@@ -83,6 +83,14 @@ SEED_DEFECTS: list[dict] = [
         "expected_detection_outcome": "new_finding",
         "bug_class": "trust-child-without-re-derivation",
     },
+    {
+        "defect_id": "bug10",
+        "revert_commit": "ed78bf5",
+        "fix_subject": "catch ConnectionError in _send_stream (Windows compat)",
+        "target_probe": "C10_connection_aborted_error",
+        "expected_detection_outcome": "new_finding",
+        "bug_class": "platform-incomplete exception enumeration",
+    },
 ]
 
 K = len(SEED_DEFECTS)
@@ -175,20 +183,7 @@ def run(result):
         "runner_results": dict(_RUNNER_RESULTS),
         "detected_count": detected_count,
         "sensitivity": sensitivity,
-        "gaps": [
-            {
-                "defect_id": "bug10",
-                "issue": (
-                    "no C10 probe for Windows ConnectionAbortedError "
-                    "(commit ed78bf5). M1 cannot exercise its detection."
-                ),
-                "follow_up": (
-                    "Add C10 to probe_c_convergence.py before the "
-                    "v0.7-pre-registration tag; then add a 5th SEED_DEFECTS "
-                    "entry and re-hash SEED_LIST_DIGEST."
-                ),
-            },
-        ],
+        "gaps": [],  # bug10 gap closed by C10 probe (commit 9bc0b7d follow-up)
     }
     result["outcome"] = outcome
     if not _RUNNER_RESULTS:

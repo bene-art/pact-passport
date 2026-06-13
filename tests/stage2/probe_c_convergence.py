@@ -436,9 +436,66 @@ def C9(result):
             teardown(a, b, c)
 
 
+# ---------------------------------------------------------------------------
+# C10 — stream-partition transport handler catches ConnectionError (Bug 10)
+# ---------------------------------------------------------------------------
+@probe(
+    probe_id="C10_connection_aborted_error",
+    tier="C",
+    pairing=_PAIRING,
+    prediction="_send_stream catches `ConnectionError` (parent of BrokenPipeError, ConnectionResetError, ConnectionAbortedError) — Bug 10 fix preserved. Windows WinError 10053 is covered without enumerating it.",
+    threshold="Source narrowed back to (BrokenPipeError, ConnectionResetError) tuple — Bug 10 regression; Windows would silently skip the cancelled-receipt write again (the original Bug 7-on-Windows failure the v0.6.0 CI matrix caught).",
+    citation="Bug 10 (v0.6.1); see EXPERIMENTS.md Part 2 §10; regression test mirrors tests/test_server.py::test_send_stream_catches_all_connection_error_subclasses.",
+    classification="DETERMINISTIC",
+    n_trials=1,
+)
+def C10(result):
+    # Static catch-class check. Bug 10 was about the transport-layer
+    # exception catch being POSIX-only (BrokenPipeError, ConnectionResetError);
+    # Windows raises ConnectionAbortedError (WinError 10053) on consumer
+    # disconnect, which escaped the catch and bypassed chunks_iter.close()
+    # cleanup — leaving zero cancelled receipts. The fix widens to the
+    # parent class ConnectionError, which covers all three platform variants
+    # and any future subclass.
+    #
+    # Pair with test_server.py's unit-level regression (same shape) and a
+    # behavioral probe at NUC time that runs on Windows and verifies the
+    # cancelled-receipt write end-to-end.
+    import inspect
+    from pact_passport.transport import server as server_mod
+    src = inspect.getsource(server_mod)
+
+    # The fix uses the parent class.
+    uses_parent_class = "except ConnectionError:" in src
+    # The Bug 10 regression shape: narrow tuple that omits ConnectionAbortedError.
+    has_narrow_tuple = "except (BrokenPipeError, ConnectionResetError):" in src
+    # The hierarchy our fix depends on. If Python ever broke this we'd
+    # want to know — but it's been stable since 3.3 (PEP 3151).
+    hierarchy_ok = (
+        issubclass(BrokenPipeError, ConnectionError)
+        and issubclass(ConnectionResetError, ConnectionError)
+        and issubclass(ConnectionAbortedError, ConnectionError)
+    )
+
+    result["observations"] = {
+        "send_stream_uses_ConnectionError": uses_parent_class,
+        "send_stream_uses_narrow_tuple_REGRESSION": has_narrow_tuple,
+        "python_exception_hierarchy_valid": hierarchy_ok,
+        "TODO": (
+            "Static catch-class check; pair with a behavioral probe at "
+            "NUC time that runs on Windows, force-disconnects mid-stream, "
+            "and asserts the cancelled-receipt write happened (the actual "
+            "v0.6.0 CI failure mode Bug 10 closed)."
+        ),
+    }
+    result["outcome"] = "pass" if (
+        uses_parent_class and not has_narrow_tuple and hierarchy_ok
+    ) else "new_finding"
+
+
 def run_all():
-    """Sequence C1–C9 in order. Each writes its own JSON via the decorator."""
-    for fn in (C1, C2, C3, C4, C5, C6, C7, C8, C9):
+    """Sequence C1–C10 in order. Each writes its own JSON via the decorator."""
+    for fn in (C1, C2, C3, C4, C5, C6, C7, C8, C9, C10):
         fn()
 
 
