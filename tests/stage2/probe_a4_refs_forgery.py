@@ -61,11 +61,13 @@ def run(result):
             def nuc_ask(_payload):
                 return {"text": "ok"}
 
-            # Mac → NUC; produces receipt A on Mac side.
-            cap_mac_to_nuc = issue_capability(
-                issuer_private_key=mac["private_key"],
-                issuer_id=mac["agent_id"],
-                holder_id=nuc["agent_id"],
+            # Mac → NUC; produces receipt A on NUC (the receiver). For
+            # NUC's v0.6 verifier (issuer == self) to honor the cap, NUC
+            # must have ISSUED it for MAC (the sender) to hold.
+            cap_nuc_issued_for_mac = issue_capability(
+                issuer_private_key=nuc["private_key"],
+                issuer_id=nuc["agent_id"],
+                holder_id=mac["agent_id"],
                 action="ask",
             )
             req_a = build_req(
@@ -73,17 +75,19 @@ def run(result):
                 from_id=mac["agent_id"],
                 to_id=nuc["agent_id"],intent="task",
             payload={"action": "ask", "prompt": "hi"},
-                cap_envelope=cap_mac_to_nuc.to_dict(),
+                cap_envelope=cap_nuc_issued_for_mac.to_dict(),
             holder_proof_key=mac["private_key"],
             )
             res_a = send_message(nuc["url"], req_a)
 
-            # NUC → Mac with FABRICATED refs[]
+            # NUC → Mac with FABRICATED refs[]. Mirrored direction: MAC is
+            # the receiver, so MAC must have issued the cap that NUC
+            # holds to call into MAC.
             fabricated = f"receipt:{uuid.uuid4()}"
-            cap_nuc_to_mac = issue_capability(
-                issuer_private_key=nuc["private_key"],
-                issuer_id=nuc["agent_id"],
-                holder_id=mac["agent_id"],
+            cap_mac_issued_for_nuc = issue_capability(
+                issuer_private_key=mac["private_key"],
+                issuer_id=mac["agent_id"],
+                holder_id=nuc["agent_id"],
                 action="ask",
             )
             req_b = build_req(
@@ -91,7 +95,7 @@ def run(result):
                 from_id=nuc["agent_id"],
                 to_id=mac["agent_id"],intent="task",
             payload={"action": "ask", "prompt": "hi"},
-                cap_envelope=cap_nuc_to_mac.to_dict(),
+                cap_envelope=cap_mac_issued_for_nuc.to_dict(),
             holder_proof_key=nuc["private_key"],
                 refs=[fabricated],
             )

@@ -203,9 +203,16 @@ def C4(result):
         try:
             @mac["agent"].handle("ping")
             def ping(_p): return {"pong": True}
+            # Cap direction: Mac is the receiver, so Mac must have issued
+            # the cap that NUC holds (per v0.6 single-issuer rule:
+            # cap.issuer == receiver). Prior version had the direction
+            # reversed (issuer=nuc, holder=mac) and Mac silently rejected
+            # on capability_invalid before reaching the refs[] code path —
+            # masking the actual C4 limitation this probe is supposed to
+            # confirm. Same bug class as A4 (fixed in dff972f / task #48).
             cap = issue_capability(
-                issuer_private_key=nuc["private_key"], issuer_id=nuc["agent_id"],
-                holder_id=mac["agent_id"], action="ping",
+                issuer_private_key=mac["private_key"], issuer_id=mac["agent_id"],
+                holder_id=nuc["agent_id"], action="ping",
             )
             req = build_req(
             from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
