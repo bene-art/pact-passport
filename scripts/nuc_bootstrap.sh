@@ -86,7 +86,14 @@ else
 fi
 
 # shellcheck disable=SC1091
-source .venv/bin/activate
+# Cross-platform venv layout: POSIX puts activate under bin/, Windows under Scripts/.
+if [[ -f .venv/bin/activate ]]; then
+    source .venv/bin/activate
+elif [[ -f .venv/Scripts/activate ]]; then
+    source .venv/Scripts/activate
+else
+    die "no venv activate script found under .venv/bin or .venv/Scripts"
+fi
 
 log "pip install -e \".[dev,cbor,fast]\""
 pip install --upgrade pip >/dev/null
