@@ -64,19 +64,23 @@ git checkout --detach "$TARGET_SHA"
 
 if [[ ! -d .venv ]]; then
     log "creating .venv"
-    # Cross-platform Python invocation: try `python3` first (POSIX
-    # convention), fall back to `python` (Windows convention). The
-    # Microsoft Store stub at WindowsApps\python3.exe denies access
-    # in non-interactive shells, so prefer real interpreters.
-    if command -v python3 >/dev/null 2>&1 && python3 -c "import sys; sys.exit(0)" 2>/dev/null; then
-        PY=python3
-    elif command -v python >/dev/null 2>&1 && python -c "import sys; sys.exit(0)" 2>/dev/null; then
-        PY=python
-    else
-        die "no working python interpreter found (need python3 or python on PATH)"
-    fi
+    # Cross-platform Python: pick first interpreter on PATH whose
+    # path is actually readable+executable AND doesn't live under
+    # Microsoft Store's WindowsApps (those are App Execution Alias
+    # stubs that hard-fail EACCES under non-interactive shells).
+    PY=
+    for cand in python python3 py; do
+        path=$(command -v "$cand" 2>/dev/null || true)
+        [[ -z "$path" ]] && continue
+        # Skip WindowsApps stubs (the Permission Denied trap).
+        if [[ "$path" == *"/WindowsApps/"* ]]; then continue; fi
+        if [[ ! -r "$path" ]]; then continue; fi
+        # Confirm it can actually run.
+        "$cand" -c "import sys" 2>/dev/null && { PY="$cand"; break; } || true
+    done
+    [[ -n "$PY" ]] || die "no working python interpreter on PATH (skipping any WindowsApps stubs)"
     log "using interpreter: $PY ($($PY --version 2>&1))"
-    $PY -m venv .venv
+    "$PY" -m venv .venv
 else
     log ".venv exists; reusing"
 fi
