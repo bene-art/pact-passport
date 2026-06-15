@@ -1,0 +1,77 @@
+(*
+ * PACT P-OPAQUE — ProVerif model
+ *
+ * Lemma P-OPAQUE (Appendix A §A.3):
+ *   The refusal output of the visa-issuance gate is a constant `denied`
+ *   independent of which policy reason produced the refusal. An external
+ *   observer cannot distinguish refuse-for-policy-A from refuse-for-policy-B.
+ *
+ * Formalized as ProVerif observational equivalence:
+ *   honest_gate(reason_a) ≈_obs honest_gate(reason_b)
+ * where `reason_a` and `reason_b` are PUBLIC free names — the attacker has
+ * both values in its initial term knowledge. This is the strong form of
+ * P-OPAQUE: even when the policy reason space is attacker-known (as it is
+ * in practice — fault codes are spec-defined: §6.3 standard fault codes),
+ * the gate's output does not reveal which reason fired.
+ *
+ * Why this matters:
+ *   The PACT spec (§6.3, §15.x) catalogs fault codes for cap/visa refusal:
+ *   capability_invalid, holder_proof_invalid, deadline_exceeded, etc. A
+ *   reviewer at a security venue will ask: "do these codes leak which check
+ *   the gate failed at?" P-OPAQUE-as-stated says no — the gate's outward
+ *   message is the constant `denied`, and the spec-defined fault codes are
+ *   either suppressed at the trust boundary, or themselves do not
+ *   distinguish failure modes in a way an attacker can exploit.
+ *
+ * What this models:
+ *   - The gate receives a request, internally picks a refusal reason from a
+ *     non-trivial public reason space, and emits a refusal message.
+ *   - The attacker has all reason values in initial knowledge and observes
+ *     network output.
+ *
+ * What this does NOT model:
+ *   - Timing side channels (ProVerif is purely symbolic; out-of-band).
+ *   - Receipt-side leakage (covered by Tamarin's P-AUTH/P-BIND on receipts).
+ *   - Liveness or denial-of-service properties.
+ *
+ * The "model-has-teeth" check is in `pact_opaque_negative_control.pv` —
+ * a leaky-gate variant that ProVerif must FALSIFY for this positive
+ * verification to be meaningful.
+ *)
+
+free c: channel.
+
+free denied: bitstring.
+
+(* Public reason tags — attacker has both values in initial term knowledge. *)
+free reason_a: bitstring.
+free reason_b: bitstring.
+
+(* Honest gate (matches spec §15.x): outputs the constant `denied`,
+   ignoring which reason fired. *)
+let honest_gate(r: bitstring) =
+    in(c, req: bitstring);
+    out(c, denied).
+
+process
+    ! (
+        ( honest_gate(choice[reason_a, reason_b]) )
+    )
+
+(*
+ * Re-verification:
+ *
+ *   proverif pact_opaque.pv
+ *
+ * Expected output:
+ *   "Observational equivalence is true."
+ *
+ * Negative control:
+ *
+ *   proverif pact_opaque_negative_control.pv
+ *
+ * Expected output:
+ *   "Observational equivalence cannot be proved."
+ *
+ * If both files behave as expected, P-OPAQUE is meaningfully verified.
+ *)

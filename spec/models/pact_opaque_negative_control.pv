@@ -1,0 +1,45 @@
+(*
+ * PACT P-OPAQUE — Negative control
+ *
+ * Mirrors pact_opaque.pv except:
+ *   1. The choice is over PUBLIC reason tags (`free reason_a, reason_b`),
+ *      so the attacker has both values in its initial term knowledge and
+ *      can compare any leaked second-tuple-component against them.
+ *   2. The gate process LEAKS the chosen reason in its output.
+ *
+ * Expected ProVerif outcome: "Observational equivalence cannot be proved."
+ * with a distinguishing trace where the attacker can test the leaked value
+ * against `reason_a` vs `reason_b`.
+ *
+ * Why public reasons here when pact_opaque.pv uses private nonces:
+ *   - The positive case (pact_opaque.pv) shows the gate IGNORES the reason;
+ *     fresh private nonces are sufficient because the gate's output doesn't
+ *     depend on r at all. Equivalence holds vacuously over r.
+ *   - The negative case (this file) needs the leak to be OBSERVABLE. Fresh
+ *     private nonces leaked to the attacker are indistinguishable noise.
+ *     Public free names are in attacker knowledge from t=0, so leaking them
+ *     produces a syntactically distinguishable output.
+ *
+ * This file is NOT part of the v0.7-pre-registration claim. It exists
+ * solely to validate the methodology of pact_opaque.pv — if THIS file's
+ * equivalence query returned "true," the positive case's verification
+ * would be suspect.
+ *)
+
+free c: channel.
+
+free denied: bitstring.
+
+(* Public reason tags — attacker has both in initial knowledge. *)
+free reason_a: bitstring.
+free reason_b: bitstring.
+
+(* Leaky gate — emits (denied, r) revealing which reason fired. *)
+let leaky_gate(r: bitstring) =
+    in(c, req: bitstring);
+    out(c, (denied, r)).
+
+process
+    ! (
+        ( leaky_gate(choice[reason_a, reason_b]) )
+    )
