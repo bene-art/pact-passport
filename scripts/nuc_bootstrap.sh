@@ -123,19 +123,22 @@ pytest tests/test_stage2_harness.py -q 2>&1 | tail -3
 export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 log "smoke probe: probe_r1_replay (loopback)"
 
-# Capture R1's results dir name (each invocation creates results_<UTC-ts>/).
-PRE_DIRS=$(ls -d tests/stage2/results_* 2>/dev/null | sort -u || true)
-python -m tests.stage2.probe_r1_replay >/dev/null 2>&1
-POST_DIRS=$(ls -d tests/stage2/results_* 2>/dev/null | sort -u || true)
-NEW_DIR=$(comm -13 <(echo "$PRE_DIRS") <(echo "$POST_DIRS") | tail -1)
+# Wipe any prior results dirs to avoid PRE/POST confusion. The harness
+# unit tests can leak files into a results dir on Windows when
+# monkeypatch.chdir isn't honored; cleanest is to start fresh and then
+# locate R1's output by name afterward.
+rm -rf tests/stage2/results_* 2>/dev/null || true
 
-if [[ -z "$NEW_DIR" || ! -f "$NEW_DIR/R1_v013_replay.json" ]]; then
+python -m tests.stage2.probe_r1_replay >/dev/null 2>&1
+R1_JSON=$(find tests/stage2 -path '*/results_*/R1_v013_replay.json' -print -quit 2>/dev/null)
+
+if [[ -z "$R1_JSON" || ! -f "$R1_JSON" ]]; then
     die "R1 probe did not write a result JSON — check probe output"
 fi
 
 R1_OUTCOME=$(python -c "
 import json, sys
-d = json.load(open('$NEW_DIR/R1_v013_replay.json'))
+d = json.load(open('$R1_JSON'))
 print(d.get('outcome', '?'))
 print(d.get('elapsed_s', '?'))
 print(d.get('provenance', {}).get('git_sha', '?')[:12])
