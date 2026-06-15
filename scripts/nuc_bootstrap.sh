@@ -136,13 +136,13 @@ if [[ -z "$R1_JSON" || ! -f "$R1_JSON" ]]; then
     die "R1 probe did not write a result JSON — check probe output"
 fi
 
+# Python on Windows prints \r\n; tr strips CR so trailing whitespace
+# doesn't poison the outcome comparison below.
 R1_OUTCOME=$(python -c "
-import json, sys
+import json
 d = json.load(open('$R1_JSON'))
-print(d.get('outcome', '?'))
-print(d.get('elapsed_s', '?'))
-print(d.get('provenance', {}).get('git_sha', '?')[:12])
-")
+print(d.get('outcome', '?'), d.get('elapsed_s', '?'), d.get('provenance', {}).get('git_sha', '?')[:12])
+" | tr -d '\r')
 read -r r1_outcome r1_elapsed r1_sha <<< "$R1_OUTCOME"
 log "R1: outcome=$r1_outcome elapsed=${r1_elapsed}s git_sha=$r1_sha"
 
