@@ -96,9 +96,9 @@ else
 fi
 
 log "pip install -e \".[dev,cbor,fast]\""
-# `pip install --upgrade pip` fails on Windows (pip can't replace its own .exe
-# while it's running). Use `python -m pip` which is the cross-platform form.
-python -m pip install --upgrade pip >/dev/null
+# Skip pip self-upgrade — Windows can't always replace pip.exe while it's
+# running and a non-current pip is fine for our deps. Use `python -m pip`
+# for the install itself (cross-platform; doesn't rely on pip.exe shim).
 python -m pip install -e ".[dev,cbor,fast]" 2>&1 | tail -3
 
 # Confirm pact_passport actually imports.
