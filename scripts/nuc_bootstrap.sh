@@ -64,7 +64,19 @@ git checkout --detach "$TARGET_SHA"
 
 if [[ ! -d .venv ]]; then
     log "creating .venv"
-    python3 -m venv .venv
+    # Cross-platform Python invocation: try `python3` first (POSIX
+    # convention), fall back to `python` (Windows convention). The
+    # Microsoft Store stub at WindowsApps\python3.exe denies access
+    # in non-interactive shells, so prefer real interpreters.
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import sys; sys.exit(0)" 2>/dev/null; then
+        PY=python3
+    elif command -v python >/dev/null 2>&1 && python -c "import sys; sys.exit(0)" 2>/dev/null; then
+        PY=python
+    else
+        die "no working python interpreter found (need python3 or python on PATH)"
+    fi
+    log "using interpreter: $PY ($($PY --version 2>&1))"
+    $PY -m venv .venv
 else
     log ".venv exists; reusing"
 fi
