@@ -137,12 +137,9 @@ if [[ -z "$R1_JSON" || ! -f "$R1_JSON" ]]; then
 fi
 
 # Python on Windows prints \r\n; tr strips CR so trailing whitespace
-# doesn't poison the outcome comparison below.
-R1_OUTCOME=$(python -c "
-import json
-d = json.load(open('$R1_JSON'))
-print(d.get('outcome', '?'), d.get('elapsed_s', '?'), d.get('provenance', {}).get('git_sha', '?')[:12])
-" | tr -d '\r')
+# doesn't poison the outcome comparison below. Single-line python -c
+# avoids the multi-line quoting hazards on Git-Bash-for-Windows.
+R1_OUTCOME=$(python -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['outcome'], d.get('elapsed_s','?'), d.get('provenance',{}).get('git_sha','?')[:12])" "$R1_JSON" | tr -d '\r')
 read -r r1_outcome r1_elapsed r1_sha <<< "$R1_OUTCOME"
 log "R1: outcome=$r1_outcome elapsed=${r1_elapsed}s git_sha=$r1_sha"
 
