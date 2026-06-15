@@ -96,8 +96,10 @@ else
 fi
 
 log "pip install -e \".[dev,cbor,fast]\""
-pip install --upgrade pip >/dev/null
-pip install -e ".[dev,cbor,fast]" 2>&1 | tail -3
+# `pip install --upgrade pip` fails on Windows (pip can't replace its own .exe
+# while it's running). Use `python -m pip` which is the cross-platform form.
+python -m pip install --upgrade pip >/dev/null
+python -m pip install -e ".[dev,cbor,fast]" 2>&1 | tail -3
 
 # Confirm pact_passport actually imports.
 RESOLVED_VERSION=$(python -c "import pact_passport; print(pact_passport.__version__)")
