@@ -624,18 +624,13 @@ class PACTAgent:
             self._store.save_capability(self.name, cap_dict)
 
         # Holder proof is mandatory when cap_id is present (issue #3).
-        # §12.2 ABL_BIND: when active, bypass every holder-proof check
-        # below (presence + signature + visa-nonce). The dispatch is
-        # honored regardless. See src/pact_passport/_ablations.py.
-        if _ablations.ABL_BIND:
-            logger.warning(
-                "ABL_BIND active: holder-proof bypassed for msg id=%s cap_id=%s",
-                msg.id, getattr(token, "cap_id", "?"),
-            )
-        elif not msg.holder_proof:
+        # Presence is enforced regardless of ABL_BIND / ABL_NONCE — those
+        # flags only disable the *signature check* on their respective
+        # branch, not the wire-shape requirement that the field exist.
+        if not msg.holder_proof:
             return self._dispatch_err(ctx, "holder_proof_required",
                                       "holder_proof is mandatory when cap_id is present")
-        elif token.visa:
+        if token.visa:
             # V-tier (v0.6). On a visa, holder_proof signs the visa's
             # server-issued nonce instead of msg.id. Closes V5 (nonce
             # replay across the request-pair).
@@ -644,6 +639,7 @@ class PACTAgent:
             # §12.2 ABL_NONCE: bypass nonce-binding check on visa holder-proof.
             # Predicted newly-passing attack: visa replay (V5) — same
             # (visa, holder_proof) pair authorizes two distinct request-pairs.
+            # Scope is disjoint from ABL_BIND so §12 attribution stays sharp.
             if _ablations.ABL_NONCE:
                 logger.warning(
                     "ABL_NONCE active: visa nonce-binding bypassed for visa %s",
@@ -653,7 +649,16 @@ class PACTAgent:
                 return self._dispatch_err(ctx, "holder_proof_invalid",
                                           "Visa holder-proof did not sign visa nonce")
         else:
-            if not verify_holder_proof(msg, ctx.sender_pub):
+            # §12.2 ABL_BIND: bypass non-visa holder-proof signature check.
+            # Predicted newly-passing attack: stolen-token (B2) — attacker
+            # presents a cap they don't hold and any signature they own.
+            # Scope is disjoint from ABL_NONCE (visa branch).
+            if _ablations.ABL_BIND:
+                logger.warning(
+                    "ABL_BIND active: holder-proof signature bypassed for msg id=%s cap_id=%s",
+                    msg.id, getattr(token, "cap_id", "?"),
+                )
+            elif not verify_holder_proof(msg, ctx.sender_pub):
                 return self._dispatch_err(ctx, "holder_proof_invalid",
                                           "Holder proof verification failed")
 

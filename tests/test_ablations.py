@@ -166,18 +166,17 @@ def _post_req(alice_url: str, msg: PACTMessage) -> dict:
         return json.loads(e.read())
 
 
-def _build_unsigned_req_with_cap(
+def _build_wrong_signed_req_with_cap(
     mallory_id: str,
     alice_id: str,
     cap_dict: dict,
     mallory_priv: bytes,
     mallory_pub_b64: str,
 ):
-    """Build a REQ that carries cap_id + cap_envelope but NO holder_proof —
-    the stolen-token attack shape: attacker has the cap dict (perhaps from
-    a captured envelope) and presents it inline, but cannot prove holder-key
-    possession because the holder's private key is not in the attacker's
-    possession."""
+    """Build a REQ that carries cap_id + cap_envelope + a wrong-signed
+    holder_proof. Stolen-token attack shape under v0.7 sharp BIND scope:
+    presence-of-field is required (so we can't omit it) but the signature
+    is bound to an unrelated payload."""
     msg = PACTMessage(
         id=str(uuid.uuid4()),
         type="REQ",
@@ -188,44 +187,41 @@ def _build_unsigned_req_with_cap(
         payload={"msg": "stolen-token attack"},
         cap_id=cap_dict["cap_id"],
         cap_envelope=cap_dict,
-        # holder_proof intentionally omitted.
         identity_doc={
             "agent_id": mallory_id,
             "public_key": mallory_pub_b64,
             "alg": crypto.ALG,
         },
     )
-    # Sign the outer message (this signature is fine; it's the *holder*
-    # proof that's missing).
+    # holder_proof present but signs unrelated bytes — bypasses presence
+    # check, fails signature check.
+    msg.holder_proof = base64.b64encode(
+        crypto.sign(b"not the msg id", mallory_priv)
+    ).decode("ascii")
     sig = crypto.sign(canonical_json(msg.signable_dict()), mallory_priv)
     msg.signature = base64.b64encode(sig).decode("ascii")
     return msg
 
 
-def test_abl_bind_off_rejects_missing_holder_proof(tmp_path, monkeypatch):
-    """Default config: cap_id without holder_proof => holder_proof_required."""
+def test_abl_bind_off_rejects_wrong_signed_holder_proof(tmp_path, monkeypatch):
+    """Default: cap_id with a wrong-signed holder_proof => holder_proof_invalid."""
     monkeypatch.setattr(_ablations, "ABL_BIND", False)
     alice = _start_alice(tmp_path / "alice")
     _wait_ready(alice["url"])
     try:
-        # Mint Mallory's identity inline (we don't need a full PACTAgent for her).
         mallory_priv, mallory_pub = crypto.generate_keypair()
         mallory_pub_b64 = base64.b64encode(mallory_pub).decode("ascii")
-        # agent_id = sha256(ALG + base64(public_key)) per spec §4.1.
-        # crypto.sha256_digest already returns the "sha256:<hex>" prefixed form.
         mallory_id = crypto.sha256_digest(
             f"{crypto.ALG}{mallory_pub_b64}".encode()
         )
 
-        # Alice issues a cap to Mallory.
         cap = issue_capability(
             issuer_private_key=alice["identity"]._private_key,
             issuer_id=alice["identity"].agent_id,
             holder_id=mallory_id,
             action="echo",
         )
-        # Mallory's REQ uses the cap_id but omits holder_proof.
-        msg = _build_unsigned_req_with_cap(
+        msg = _build_wrong_signed_req_with_cap(
             mallory_id, alice["identity"].agent_id, cap.to_dict(),
             mallory_priv, mallory_pub_b64,
         )
@@ -233,16 +229,17 @@ def test_abl_bind_off_rejects_missing_holder_proof(tmp_path, monkeypatch):
         resp = _post_req(alice["url"], msg)
         assert resp.get("status") in ("error", "rejected"), resp
         fault_code = (resp.get("fault") or {}).get("code")
-        assert fault_code == "holder_proof_required", resp
+        assert fault_code == "holder_proof_invalid", resp
     finally:
         alice["server"].stop()
 
 
-def test_abl_bind_on_honors_request_with_no_holder_proof(tmp_path, monkeypatch, caplog):
-    """ABL_BIND on: same REQ that the default rejects is now honored.
+def test_abl_bind_on_honors_wrong_signed_request(tmp_path, monkeypatch, caplog):
+    """ABL_BIND on: the same wrong-signed REQ is now honored.
 
-    This is the §12.2 ABL-BIND predicted-newly-passing-attack —
-    stolen-token succeeds because holder-proof enforcement is removed.
+    §12.2 ABL-BIND predicted-newly-passing-attack: stolen-token. ABL_BIND
+    has DISJOINT scope from ABL_NONCE — it only affects the non-visa
+    holder-proof signature check, not presence and not the visa branch.
     """
     monkeypatch.setattr(_ablations, "ABL_BIND", True)
 
@@ -251,8 +248,6 @@ def test_abl_bind_on_honors_request_with_no_holder_proof(tmp_path, monkeypatch, 
     try:
         mallory_priv, mallory_pub = crypto.generate_keypair()
         mallory_pub_b64 = base64.b64encode(mallory_pub).decode("ascii")
-        # agent_id = sha256(ALG + base64(public_key)) per spec §4.1.
-        # crypto.sha256_digest already returns the "sha256:<hex>" prefixed form.
         mallory_id = crypto.sha256_digest(
             f"{crypto.ALG}{mallory_pub_b64}".encode()
         )
@@ -263,7 +258,7 @@ def test_abl_bind_on_honors_request_with_no_holder_proof(tmp_path, monkeypatch, 
             holder_id=mallory_id,
             action="echo",
         )
-        msg = _build_unsigned_req_with_cap(
+        msg = _build_wrong_signed_req_with_cap(
             mallory_id, alice["identity"].agent_id, cap.to_dict(),
             mallory_priv, mallory_pub_b64,
         )
@@ -271,14 +266,53 @@ def test_abl_bind_on_honors_request_with_no_holder_proof(tmp_path, monkeypatch, 
         with caplog.at_level(logging.WARNING, logger="pact_passport.agent"):
             resp = _post_req(alice["url"], msg)
 
-        # The handler ran: echo returned the payload.
         assert resp.get("status") == "ok", resp
         body = resp.get("body") or resp.get("payload") or resp
         assert "echo" in str(body) or "stolen-token attack" in str(body), resp
-
-        # And the bypass left an audit-trail WARNING — the §12.2 commitment.
         warnings = [r for r in caplog.records if "ABL_BIND active" in r.message]
         assert warnings, "ABL_BIND bypass must emit a WARNING log line"
+    finally:
+        alice["server"].stop()
+
+
+def test_abl_bind_still_enforces_holder_proof_presence(tmp_path, monkeypatch):
+    """ABL_BIND on but no holder_proof field present => still rejected.
+
+    Sharp BIND scope (post-2026-06-15): the flag only disables the
+    signature check, not the wire-shape requirement. This keeps §12
+    attribution disjoint between ABL_BIND and ABL_NONCE — both depend
+    on presence-of-field as a structural invariant.
+    """
+    monkeypatch.setattr(_ablations, "ABL_BIND", True)
+    alice = _start_alice(tmp_path / "alice")
+    _wait_ready(alice["url"])
+    try:
+        mallory_priv, mallory_pub = crypto.generate_keypair()
+        mallory_pub_b64 = base64.b64encode(mallory_pub).decode("ascii")
+        mallory_id = crypto.sha256_digest(
+            f"{crypto.ALG}{mallory_pub_b64}".encode()
+        )
+        cap = issue_capability(
+            issuer_private_key=alice["identity"]._private_key,
+            issuer_id=alice["identity"].agent_id,
+            holder_id=mallory_id,
+            action="echo",
+        )
+        # No holder_proof set on this message.
+        msg = PACTMessage(
+            id=str(uuid.uuid4()), type="REQ",
+            from_agent=mallory_id, to_agent=alice["identity"].agent_id,
+            intent="task",
+            deadline=(datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+            payload={"msg": "no proof at all"},
+            cap_id=cap.cap_id, cap_envelope=cap.to_dict(),
+            identity_doc={"agent_id": mallory_id, "public_key": mallory_pub_b64,
+                          "alg": crypto.ALG},
+        )
+        sig = crypto.sign(canonical_json(msg.signable_dict()), mallory_priv)
+        msg.signature = base64.b64encode(sig).decode("ascii")
+        resp = _post_req(alice["url"], msg)
+        assert (resp.get("fault") or {}).get("code") == "holder_proof_required", resp
     finally:
         alice["server"].stop()
 
