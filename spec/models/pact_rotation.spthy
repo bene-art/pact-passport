@@ -1,0 +1,57 @@
+/*
+ * PACT Rotation — Tamarin model (KEY-CONT only)
+ *
+ * Discharges Appendix A KEY-CONT lemma. Split from pact_core.spthy because
+ * mixing rotation state transitions with the message-passing flow caused
+ * the auto-prover's search space to explode on otherwise tractable lemmas.
+ *
+ * This file models identity inception + rotation only. Every rotation
+ * commits a fresh next-secret hash; the lemma verifies that any Rotated
+ * action was preceded by a Committed action with the correct hash.
+ */
+
+theory PactRotation
+begin
+
+builtins: hashing, signing
+
+functions:
+    alg/0
+
+rule Create_Agent:
+    let aid     = h(<alg, pk(~sk)>)
+        commit  = h(pk(~sk_next))
+    in
+    [ Fr(~sk), Fr(~sk_next) ]
+  --[ Created($A, aid),
+      Committed($A, commit) ]->
+    [ AgentState($A, aid, ~sk, ~sk_next),
+      Out(<aid, pk(~sk), commit>) ]
+
+rule Rotate_Honest:
+    let pk_new      = pk(~sk_next)
+        commit_new  = h(pk(~sk_next2))
+    in
+    [ AgentState($A, aid, ~sk_curr, ~sk_next),
+      Fr(~sk_next2) ]
+  --[ Rotated($A, aid, ~sk_curr, ~sk_next),
+      Committed($A, commit_new),
+      ContinuityHolds($A, h(pk_new)) ]->
+    [ AgentState($A, aid, ~sk_next, ~sk_next2),
+      Out(<aid, pk_new, commit_new>) ]
+
+// -----------------------------------------------------------------------------
+// KEY-CONT: a rotation is recorded only if the new key's hash matches a prior
+// commitment. Each rotation emits a fresh Committed action so chains of
+// arbitrary length are covered, not just first rotation.
+// -----------------------------------------------------------------------------
+lemma KEY_CONT:
+    "All A aid sk_curr sk_next #i.
+        Rotated(A, aid, sk_curr, sk_next)@i
+        ==> Ex #j. Committed(A, h(pk(sk_next)))@j & j < i"
+
+lemma honest_rotation_exists:
+    exists-trace
+    "Ex A aid sk_c sk_n #i. Rotated(A, aid, sk_c, sk_n)@i"
+
+end

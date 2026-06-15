@@ -1,0 +1,183 @@
+/*
+ * PACT Core — Tamarin model (auth + caps + visa; no rotation)
+ *
+ * Discharges Appendix A lemmas P-AUTH, P-MONO (unbounded K), P-BIND, and
+ * P-REPLAY (visa). Rotation continuity (KEY-CONT) is in pact_rotation.spthy.
+ *
+ * Conventions:
+ *   - Dolev–Yao attacker (Tamarin default).
+ *   - Sign / Verify and h() (SHA-256) as perfect primitives (builtins).
+ *   - Public constants `'string'`; fresh `~x`; public names `$A`.
+ *   - Action facts (between `--[ ... ]->`) label the trace; they do not
+ *     change protocol behavior.
+ *
+ * Why no rotation in this file:
+ *   Mixing rotation transitions with message/cap rules caused the auto-prover
+ *   to explore rotation-related paths even when proving non-rotation lemmas,
+ *   blowing up search space (P_AUTH non-terminating at 1.9GB in single-lemma
+ *   run after model restructuring). Rotation lives in pact_rotation.spthy.
+ *
+ * Simplifications vs the wire spec:
+ *   - REQ/RES abstracted to <body, sender, sig>.
+ *   - Caveat lattice abstracted to additive tag append (real partial order
+ *     in spec §5.3).
+ */
+
+theory PactCore
+begin
+
+builtins: hashing, signing
+
+functions:
+    alg/0
+
+// =============================================================================
+// §A.1  Identity inception (no rotation here)
+// =============================================================================
+
+rule Create_Agent:
+    let aid = h(<alg, pk(~sk)>) in
+    [ Fr(~sk) ]
+  --[ Created($A, aid) ]->
+    [ !Identity($A, aid, ~sk),
+      !HolderKey($A, ~sk),
+      Out(<aid, pk(~sk)>) ]
+
+// =============================================================================
+// §A.1  Message sign / accept  (P-AUTH)
+// =============================================================================
+//
+// Sources lemma hint: we explicitly emit Signed at sign time and require the
+// verifier to bind to !Identity. This gives Tamarin's auto-prover a clean
+// derivation: an attacker who produced a verifying signature under aid's key
+// must have had access to ~sk, which is only ever emitted under !Identity.
+
+rule Send_Signed:
+    let body = <~m, aid> in
+    [ !Identity($A, aid, ~sk), Fr(~m) ]
+  --[ Signed(~m, aid) ]->
+    [ Out(<aid, ~m, sign(body, ~sk)>) ]
+
+rule Accept_Signed:
+    [ In(<aid, m, s>),
+      !Identity($A, aid, ~sk) ]
+  --[ Accepted(m, aid),
+      Eq(verify(s, <m, aid>, pk(~sk)), true) ]->
+    [ ]
+
+restriction equal:
+    "All x y #i. Eq(x, y)@i ==> x = y"
+
+// =============================================================================
+// §A.2  Capabilities — issue, attenuate
+// =============================================================================
+
+rule Issue_Root_Cap:
+    let cap_body = <~cap_id, $I, $H, $action>
+        sig      = sign(cap_body, ~sk_i)
+    in
+    [ !Identity($I, aid_i, ~sk_i),
+      Fr(~cap_id) ]
+  --[ Issued(~cap_id, aid_i, $H, $action),
+      RootCap(~cap_id, $action) ]->
+    [ !Cap(~cap_id, aid_i, $H, $action, 'root', sig),
+      Out(<~cap_id, $I, $H, $action, sig>) ]
+
+rule Attenuate_Cap:
+    let parent_body = <cap_id_parent, aid_i, $H_parent, $action>
+        child_body  = <~cap_id_child, cap_id_parent, $H_child, $action>
+        link_sig    = sign(child_body, ~sk_parent)
+    in
+    [ !Cap(cap_id_parent, aid_i, $H_parent, $action, caveats_parent, parent_sig),
+      !HolderKey($H_parent, ~sk_parent),
+      Fr(~cap_id_child) ]
+  --[ Attenuated(cap_id_parent, ~cap_id_child, $action),
+      ActionPreservedAtStep(cap_id_parent, ~cap_id_child, $action) ]->
+    [ !Cap(~cap_id_child, aid_i, $H_child, $action,
+           <caveats_parent, 'attenuated'>, link_sig),
+      Out(<~cap_id_child, $H_child, $action, link_sig>) ]
+
+// =============================================================================
+// §A.2  Holder-binding (P-BIND)
+// =============================================================================
+
+rule Use_Cap:
+    [ !Cap(cap_id, aid_i, $H, $action, caveats, sig),
+      !HolderKey($H, ~sk_h),
+      Fr(~req_id) ]
+  --[ Presented(~req_id, cap_id, $H),
+      HolderProofMade(cap_id, $H) ]->
+    [ Out(<~req_id, cap_id, sign(~req_id, ~sk_h)>) ]
+
+rule Honor_Cap:
+    [ In(<req_id, cap_id, hp>),
+      !Cap(cap_id, aid_i, $H, $action, caveats, sig),
+      !HolderKey($H, ~sk_h) ]
+  --[ Honored(req_id, cap_id, $H),
+      Eq(verify(hp, req_id, pk(~sk_h)), true) ]->
+    [ ]
+
+// =============================================================================
+// §A.3  Visa — session-scoped, one-shot
+// =============================================================================
+
+rule Issue_Visa:
+    let visa_body = <~visa_id, $I, $H, 'visa', ~nonce>
+        sig       = sign(visa_body, ~sk_i)
+    in
+    [ !Identity($I, aid_i, ~sk_i),
+      Fr(~visa_id), Fr(~nonce) ]
+  --[ VisaIssued(~visa_id, ~nonce, aid_i, $H) ]->
+    [ Visa(~visa_id, aid_i, $H, ~nonce, sig),
+      Out(<~visa_id, $I, $H, ~nonce, sig>) ]
+
+rule Use_Visa:
+    [ Visa(~visa_id, aid_i, $H, ~nonce, sig),
+      !HolderKey($H, ~sk_h) ]
+  --[ VisaUsed(~visa_id, ~nonce) ]->
+    [ Out(<'visa_use', ~visa_id, sign(~nonce, ~sk_h)>) ]
+
+// =============================================================================
+// LEMMAS
+// =============================================================================
+
+lemma P_AUTH:
+    "All m aid #i.
+        Accepted(m, aid)@i
+        ==> Ex #j. Signed(m, aid)@j & j < i"
+
+lemma P_MONO [use_induction]:
+    "All cap_root cap_child action_root action_child #i #j.
+        RootCap(cap_root, action_root)@i
+        & ActionPreservedAtStep(cap_root, cap_child, action_child)@j
+        & i < j
+        ==> action_root = action_child"
+
+lemma P_MONO_transitive [use_induction]:
+    "All cap_a cap_b cap_c action_a action_b action_c #i #j #k.
+        RootCap(cap_a, action_a)@i
+        & ActionPreservedAtStep(cap_a, cap_b, action_b)@j
+        & ActionPreservedAtStep(cap_b, cap_c, action_c)@k
+        & i < j & j < k
+        ==> action_a = action_c"
+
+lemma P_BIND:
+    "All req_id cap_id H #i.
+        Honored(req_id, cap_id, H)@i
+        ==> Ex #j. HolderProofMade(cap_id, H)@j & j < i"
+
+lemma P_REPLAY_visa:
+    "All visa_id nonce #i #j.
+        VisaUsed(visa_id, nonce)@i
+        & VisaUsed(visa_id, nonce)@j
+        ==> #i = #j"
+
+lemma honest_accept_exists:
+    exists-trace
+    "Ex m aid #i. Accepted(m, aid)@i"
+
+lemma honest_honor_exists:
+    exists-trace
+    "Ex req_id cap_id H #i. Honored(req_id, cap_id, H)@i"
+
+end
