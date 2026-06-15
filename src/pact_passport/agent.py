@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterator
 
 from zeroconf import Zeroconf
 
-from pact_passport import crypto
+from pact_passport import _ablations, crypto
 from pact_passport._canonical import canonical_json
 from pact_passport._chaos import chaos_sleep
 from pact_passport.identity import Identity
@@ -192,6 +192,23 @@ class PACTAgent:
     def _persist_invocation_counts(self) -> None:
         self._store.save_invocation_counts(self.name, self._invocation_counts)
 
+    def _persist_receipt(self, receipt: dict) -> None:
+        """Save a receipt to the store, respecting §12.2 ABL_RECEIPT.
+
+        When ABL_RECEIPT is active, the write is suppressed entirely.
+        Predicted consequence: A4 / S5 lose post-hoc orphan
+        detectability — the H3 audit-detectability claim is falsified
+        for the ablated config (no receipts to reconstruct against).
+        """
+        if _ablations.ABL_RECEIPT:
+            logger.warning(
+                "ABL_RECEIPT active: receipt write suppressed (receipt_id=%s)",
+                receipt.get("id") or receipt.get("receipt_id", "?")
+                if isinstance(receipt, dict) else "?",
+            )
+            return
+        self._store.save_receipt(self.name, receipt)
+
     def handle(
         self,
         action: str,
@@ -350,6 +367,16 @@ class PACTAgent:
         peer_lock = self._visa_tracker.lock_for(peer_network_id)
         with peer_lock:
             recent_count = self._visa_tracker.recent_count(peer_network_id)
+            # §12.2 ABL_RATE: hide accumulated count from the policy
+            # so the rate ceiling is never tripped. Predicted newly-
+            # passing attack: amplification (A6) — visa issuance per
+            # peer becomes uncapped.
+            if _ablations.ABL_RATE:
+                logger.warning(
+                    "ABL_RATE active: visa rate ceiling bypassed for peer %s (true count was %d)",
+                    peer_network_id, recent_count,
+                )
+                recent_count = 0
             vctx = VisaContext(
                 action=requested_action,
                 payload_hash=payload_hash,
@@ -398,7 +425,7 @@ class PACTAgent:
         )
         self._store.save_message(self.name, msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
-        self._store.save_receipt(self.name, create_receipt(
+        self._persist_receipt(create_receipt(
             identity._private_key, identity.agent_id,
             task_ref=msg.id, refs=[msg.id, res.id], outcome="completed",
             extra={
@@ -448,7 +475,7 @@ class PACTAgent:
         )
         self._store.save_message(self.name, msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
-        self._store.save_receipt(self.name, create_receipt(
+        self._persist_receipt(create_receipt(
             identity._private_key, identity.agent_id,
             task_ref=msg.id, refs=[msg.id, res.id], outcome="failed",
             extra={
@@ -597,16 +624,32 @@ class PACTAgent:
             self._store.save_capability(self.name, cap_dict)
 
         # Holder proof is mandatory when cap_id is present (issue #3).
-        if not msg.holder_proof:
+        # §12.2 ABL_BIND: when active, bypass every holder-proof check
+        # below (presence + signature + visa-nonce). The dispatch is
+        # honored regardless. See src/pact_passport/_ablations.py.
+        if _ablations.ABL_BIND:
+            logger.warning(
+                "ABL_BIND active: holder-proof bypassed for msg id=%s cap_id=%s",
+                msg.id, getattr(token, "cap_id", "?"),
+            )
+        elif not msg.holder_proof:
             return self._dispatch_err(ctx, "holder_proof_required",
                                       "holder_proof is mandatory when cap_id is present")
-        if token.visa:
+        elif token.visa:
             # V-tier (v0.6). On a visa, holder_proof signs the visa's
             # server-issued nonce instead of msg.id. Closes V5 (nonce
             # replay across the request-pair).
             if not token.nonce:
                 return self._dispatch_err(ctx, "visa_invalid", "visa carries no nonce")
-            if not verify_visa_holder_proof(msg.holder_proof, token.nonce, ctx.sender_pub):
+            # §12.2 ABL_NONCE: bypass nonce-binding check on visa holder-proof.
+            # Predicted newly-passing attack: visa replay (V5) — same
+            # (visa, holder_proof) pair authorizes two distinct request-pairs.
+            if _ablations.ABL_NONCE:
+                logger.warning(
+                    "ABL_NONCE active: visa nonce-binding bypassed for visa %s",
+                    token.cap_id,
+                )
+            elif not verify_visa_holder_proof(msg.holder_proof, token.nonce, ctx.sender_pub):
                 return self._dispatch_err(ctx, "holder_proof_invalid",
                                           "Visa holder-proof did not sign visa nonce")
         else:
@@ -673,7 +716,7 @@ class PACTAgent:
         )
         self._store.save_message(self.name, msg.to_dict())
         self._store.save_message(self.name, res.to_dict())
-        self._store.save_receipt(self.name, create_receipt(
+        self._persist_receipt(create_receipt(
             identity._private_key, identity.agent_id,
             task_ref=msg.id, refs=[msg.id, res.id], outcome="completed",
             extra=self._visa_receipt_extra(ctx),
@@ -768,7 +811,7 @@ class PACTAgent:
                 self._store.save_message(self.name, chunk)
             if msg.idempotency_key and outcome == "completed":
                 self._cache_idempotent_response(msg, chunk_dicts)
-            self._store.save_receipt(self.name, create_receipt(
+            self._persist_receipt(create_receipt(
                 identity._private_key, identity.agent_id,
                 task_ref=msg.id,
                 refs=[msg.id] + [c["id"] for c in chunk_dicts],
@@ -818,7 +861,7 @@ class PACTAgent:
         extra = self._visa_receipt_extra(ctx)
         if extra:
             extra["fault_code"] = code
-        self._store.save_receipt(self.name, create_receipt(
+        self._persist_receipt(create_receipt(
             ctx.identity._private_key, ctx.identity.agent_id,
             task_ref=ctx.msg.id, refs=[ctx.msg.id, res.id],
             outcome="failed",
@@ -1011,7 +1054,7 @@ class PACTAgent:
             refs=[msg.id] + ([result["id"]] if "id" in result else []),
             outcome=outcome,
         )
-        self._store.save_receipt(self.name, receipt)
+        self._persist_receipt(receipt)
 
         return result
 

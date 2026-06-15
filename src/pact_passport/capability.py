@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import uuid
 import warnings
 from datetime import datetime, UTC
 from dataclasses import dataclass, field
 
-from pact_passport import crypto
+from pact_passport import _ablations, crypto
 from pact_passport._canonical import canonical_json
 from pact_passport.errors import AttenuationViolation
+
+_ABL_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -380,6 +383,18 @@ def _verify_capability_inner(
     if token.holder != expected_holder:
         return CapabilityResult(False, f"Holder mismatch: expected {expected_holder}, got {token.holder}")
 
+    # §12.2 ABL_CHAIN: bypass ALL chain-related validation (delegator-key
+    # lookup, link signature checks, action/caveat re-derivation). The
+    # cap is accepted on the strength of the holder match alone.
+    # Predicted newly-passing attack: rogue delegator (A5) — forged
+    # chain links pass without scrutiny.
+    if _ablations.ABL_CHAIN and token.delegation_chain:
+        _ABL_LOG.warning(
+            "ABL_CHAIN active: chain validation bypassed for cap %s",
+            token.cap_id,
+        )
+        return CapabilityResult(True, None)
+
     # Verify signature
     sig_bytes = base64.b64decode(token.signature)
     signable = canonical_json(token.signable_dict())
@@ -405,7 +420,9 @@ def _verify_capability_inner(
 
     # Verify every delegation chain link. Same fail-closed rule applies:
     # any link whose key is unknown invalidates the cap. The verifier
-    # cannot trust links it cannot check.
+    # cannot trust links it cannot check. (ABL_CHAIN short-circuited
+    # earlier at the function entry, so we get here only when chain
+    # validation is in effect.)
     if token.delegation_chain and token.parent:
         if not known_keys:
             return CapabilityResult(False, "Cannot verify chain: known_keys not provided")
