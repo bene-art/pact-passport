@@ -94,15 +94,14 @@ def run(result):
             )
 
             result["observations"] = {
-                "verdict_ok": getattr(verdict, "ok", None),
-                "verdict_reason": getattr(verdict, "reason", None),
+                "verdict_valid": verdict.valid,
+                "verdict_reason": verdict.reason,
                 "missing_key_for_bob": bob["agent_id"] not in known_keys,
             }
-            # Pass criterion: verdict.ok == False AND reason mentions
+            # Pass criterion: verdict.valid == False AND reason mentions
             # missing key. Bug 5's fail-closed behavior.
-            ok = getattr(verdict, "ok", True)
-            reason = (getattr(verdict, "reason", "") or "").lower()
-            fail_closed_correctly = (not ok) and ("missing" in reason or "key" in reason)
+            reason = (verdict.reason or "").lower()
+            fail_closed_correctly = (not verdict.valid) and ("missing" in reason or "key" in reason)
             result["outcome"] = "pass" if fail_closed_correctly else "new_finding"
         finally:
             teardown(alice, bob, carol)

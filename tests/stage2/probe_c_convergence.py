@@ -263,11 +263,10 @@ def C5(result):
                             # b deliberately missing
                             c["agent_id"]: c["public_key"]},
             )
-            ok = getattr(verdict, "ok", True)
             result["observations"] = {
-                "verdict_ok": ok, "reason": getattr(verdict, "reason", None),
+                "verdict_valid": verdict.valid, "reason": verdict.reason,
             }
-            result["outcome"] = "pass" if not ok else "new_finding"
+            result["outcome"] = "pass" if not verdict.valid else "new_finding"
         finally:
             teardown(a, b, c)
 
@@ -309,12 +308,11 @@ def C6(result):
                             b["agent_id"]: b["public_key"],
                             c["agent_id"]: c["public_key"]},
             )
-            ok = getattr(verdict, "ok", True)
             result["observations"] = {
-                "verdict_ok_after_mutation": ok,
-                "reason": getattr(verdict, "reason", None),
+                "verdict_valid_after_mutation": verdict.valid,
+                "reason": verdict.reason,
             }
-            result["outcome"] = "pass" if not ok else "new_finding"
+            result["outcome"] = "pass" if not verdict.valid else "new_finding"
         finally:
             teardown(a, b, c)
 
@@ -426,12 +424,11 @@ def C9(result):
                             b["agent_id"]: b["public_key"],
                             c["agent_id"]: c["public_key"]},
             )
-            ok = getattr(verdict, "ok", True)
             result["observations"] = {
-                "verdict_ok_after_action_mutation": ok,
-                "reason": getattr(verdict, "reason", None),
+                "verdict_valid_after_action_mutation": verdict.valid,
+                "reason": verdict.reason,
             }
-            result["outcome"] = "pass" if not ok else "new_finding"
+            result["outcome"] = "pass" if not verdict.valid else "new_finding"
         finally:
             teardown(a, b, c)
 
