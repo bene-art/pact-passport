@@ -128,6 +128,45 @@ def wilson_ci(violations: int, n: int, z: float = WILSON_Z_95) -> tuple[float, f
 _VIOLATION_OUTCOMES = ("new_finding", "regression")
 
 
+def record_llm_call(
+    result: dict,
+    *,
+    model: str,
+    seed: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    num_predict: int | None = None,
+    **extra: Any,
+) -> None:
+    """Append a single LLM-call record to `result["llm_runtime"]`.
+
+    Call this immediately before / after every ollama.chat() or other
+    model invocation inside a STOCH probe. The record captures every
+    parameter that could affect output sampling so a (model_digest,
+    llm_runtime[i]) pair is sufficient for replay.
+
+    Probes also populate `result["model_digests"][model]` with the
+    resolved digest the *first* time they call `model`; that's the
+    long-lived identity, while llm_runtime[i] is the per-call params.
+
+    `extra` carries any model-specific knobs (e.g. `repeat_penalty`,
+    `mirostat`, format-mode flags) without forcing a kwargs explosion
+    on this signature.
+    """
+    record = {
+        "model": model,
+        "seed": seed,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        "num_predict": num_predict,
+    }
+    if extra:
+        record["extra"] = dict(extra)
+    result["llm_runtime"].append(record)
+
+
 def _new_result(probe_id, tier, pairing, prediction, threshold, citation,
                 classification, n_trials, trial_index) -> dict[str, Any]:
     """Fresh per-trial result skeleton with all pre-registration fields."""
@@ -146,6 +185,14 @@ def _new_result(probe_id, tier, pairing, prediction, threshold, citation,
         # digest(s) (e.g. "gemma3:e4b@sha256:..."). Empty dict for
         # purely-deterministic probes.
         "model_digests": {},
+        # Per-probe LLM call parameters captured at call time. Each
+        # entry is one record: {model, seed, temperature, top_p,
+        # top_k, num_predict, ...}. Use record_llm_call() to append.
+        # Empty list for purely-deterministic probes; STOCH probes
+        # that issue ollama.chat() / API calls MUST record params
+        # here so that a given (model_digest, llm_runtime[i]) pair
+        # is sufficient for replay. RESEARCH §6.2 reproducibility.
+        "llm_runtime": [],
         "trial_index": trial_index,
         "n_trials": n_trials,
         "receipts": [],

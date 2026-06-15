@@ -13,6 +13,7 @@ import pytest
 from tests.stage2._harness import (
     _new_result,
     probe,
+    record_llm_call,
     wilson_ci,
 )
 
@@ -294,3 +295,111 @@ def test_provenance_fields_present(tmp_path, monkeypatch):
     assert "host" in prov
     assert "os" in prov
     assert "python" in prov
+
+
+# ---------------------------------------------------------------------------
+# record_llm_call — STOCH replay-reproducibility hook
+# ---------------------------------------------------------------------------
+
+def test_result_skeleton_has_empty_llm_runtime_slot(tmp_path, monkeypatch):
+    """Every probe result starts with an empty llm_runtime list ready for append."""
+    monkeypatch.chdir(tmp_path)
+
+    @probe(
+        probe_id="X1_empty_llm_runtime",
+        tier="X",
+        pairing={"role": "smoke"},
+        prediction="pass",
+        threshold="never",
+        citation="this test",
+    )
+    def body(result):
+        result["outcome"] = "pass"
+
+    out = body()
+    assert out["llm_runtime"] == []
+    assert isinstance(out["model_digests"], dict)
+
+
+def test_record_llm_call_captures_all_sampling_params(tmp_path, monkeypatch):
+    """A single LLM call gets a full record — replay-sufficient with model_digest."""
+    monkeypatch.chdir(tmp_path)
+
+    @probe(
+        probe_id="X2_record_llm",
+        tier="X",
+        pairing={"role": "smoke"},
+        prediction="pass",
+        threshold="never",
+        citation="this test",
+    )
+    def body(result):
+        record_llm_call(
+            result,
+            model="gemma4:e4b",
+            seed=42,
+            temperature=0.7,
+            top_p=0.9,
+            top_k=40,
+            num_predict=256,
+            repeat_penalty=1.1,  # extra kwarg
+        )
+        result["outcome"] = "pass"
+
+    out = body()
+    assert len(out["llm_runtime"]) == 1
+    rec = out["llm_runtime"][0]
+    assert rec["model"] == "gemma4:e4b"
+    assert rec["seed"] == 42
+    assert rec["temperature"] == 0.7
+    assert rec["top_p"] == 0.9
+    assert rec["top_k"] == 40
+    assert rec["num_predict"] == 256
+    assert rec["extra"] == {"repeat_penalty": 1.1}
+
+
+def test_record_llm_call_multiple_calls_append_in_order(tmp_path, monkeypatch):
+    """Multiple LLM invocations in one trial each get their own record."""
+    monkeypatch.chdir(tmp_path)
+
+    @probe(
+        probe_id="X3_multi_call",
+        tier="X",
+        pairing={"role": "smoke"},
+        prediction="pass",
+        threshold="never",
+        citation="this test",
+    )
+    def body(result):
+        record_llm_call(result, model="gemma4:e4b", seed=1, temperature=0.0)
+        record_llm_call(result, model="gemma3:12b", seed=2, temperature=0.8)
+        result["outcome"] = "pass"
+
+    out = body()
+    assert [r["model"] for r in out["llm_runtime"]] == ["gemma4:e4b", "gemma3:12b"]
+    assert [r["seed"] for r in out["llm_runtime"]] == [1, 2]
+
+
+def test_record_llm_call_omitted_params_default_to_none(tmp_path, monkeypatch):
+    """Probes that don't pin a knob leave it as None — explicit, not absent."""
+    monkeypatch.chdir(tmp_path)
+
+    @probe(
+        probe_id="X4_partial_params",
+        tier="X",
+        pairing={"role": "smoke"},
+        prediction="pass",
+        threshold="never",
+        citation="this test",
+    )
+    def body(result):
+        record_llm_call(result, model="gemma4:e4b", temperature=0.3)
+        result["outcome"] = "pass"
+
+    out = body()
+    rec = out["llm_runtime"][0]
+    assert rec["model"] == "gemma4:e4b"
+    assert rec["temperature"] == 0.3
+    assert rec["seed"] is None
+    assert rec["top_p"] is None
+    assert "extra" not in rec  # no extras provided
