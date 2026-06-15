@@ -16,6 +16,12 @@ from tests.stage2._harness import (
     record_llm_call,
     wilson_ci,
 )
+from tests.stage2._ablations import (
+    assert_single_ablation_or_baseline,
+    config_id_from_env,
+    current_ablations,
+    tag_result_with_ablations,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -403,3 +409,123 @@ def test_record_llm_call_omitted_params_default_to_none(tmp_path, monkeypatch):
     assert rec["seed"] is None
     assert rec["top_p"] is None
     assert "extra" not in rec  # no extras provided
+
+
+# ---------------------------------------------------------------------------
+# §12 ablation tagging — result["ablation"] field
+# ---------------------------------------------------------------------------
+
+def test_current_ablations_empty_by_default(monkeypatch):
+    """No PACT_ABLATION_* env vars set => empty list."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    assert current_ablations() == []
+
+
+def test_current_ablations_reads_each_flag(monkeypatch):
+    """Each PACT_ABLATION_<NAME>=1 surfaces in the list."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    monkeypatch.setenv("PACT_ABLATION_BIND", "1")
+    monkeypatch.setenv("PACT_ABLATION_RATE", "1")
+    assert sorted(current_ablations()) == ["BIND", "RATE"]
+
+
+def test_config_id_baseline(monkeypatch):
+    """No flags => 'BASELINE' — the Phase A confirmatory label."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    assert config_id_from_env() == "BASELINE"
+
+
+def test_config_id_single_ablation(monkeypatch):
+    """One flag => 'ABL-<NAME>' — the §12 attribution config shape."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    monkeypatch.setenv("PACT_ABLATION_CHAIN", "1")
+    assert config_id_from_env() == "ABL-CHAIN"
+
+
+def test_config_id_multi_ablation_labels_as_hazard(monkeypatch):
+    """Multiple flags => 'ABL-MULTI:<sorted-list>' — flagged for analysis."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    monkeypatch.setenv("PACT_ABLATION_BIND", "1")
+    monkeypatch.setenv("PACT_ABLATION_CHAIN", "1")
+    assert config_id_from_env() == "ABL-MULTI:BIND,CHAIN"
+
+
+def test_assert_single_or_baseline_raises_on_multi(monkeypatch):
+    """The runner pre-flight check halts on multi-ablation configs."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    monkeypatch.setenv("PACT_ABLATION_BIND", "1")
+    monkeypatch.setenv("PACT_ABLATION_NONCE", "1")
+    with pytest.raises(RuntimeError, match="§12 violation"):
+        assert_single_ablation_or_baseline()
+
+
+def test_assert_single_or_baseline_silent_on_baseline_and_single(monkeypatch):
+    """Baseline and exactly-one configurations pass through quietly."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    assert_single_ablation_or_baseline()  # baseline — no raise
+
+    monkeypatch.setenv("PACT_ABLATION_BIND", "1")
+    assert_single_ablation_or_baseline()  # single — no raise
+
+
+def test_result_skeleton_has_baseline_ablation_label(tmp_path, monkeypatch):
+    """Every probe result starts with ablation = BASELINE when no env set."""
+    monkeypatch.chdir(tmp_path)
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+
+    @probe(
+        probe_id="X5_baseline_label",
+        tier="X",
+        pairing={"role": "smoke"},
+        prediction="pass",
+        threshold="never",
+        citation="this test",
+    )
+    def body(result):
+        result["outcome"] = "pass"
+
+    out = body()
+    assert out["ablation"] == {"active": [], "config_id": "BASELINE"}
+
+
+def test_result_skeleton_picks_up_ablation_env(tmp_path, monkeypatch):
+    """With PACT_ABLATION_CHAIN=1, every result is stamped ABL-CHAIN."""
+    monkeypatch.chdir(tmp_path)
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    monkeypatch.setenv("PACT_ABLATION_CHAIN", "1")
+
+    @probe(
+        probe_id="X6_ablation_label",
+        tier="X",
+        pairing={"role": "smoke"},
+        prediction="pass",
+        threshold="never",
+        citation="this test",
+    )
+    def body(result):
+        result["outcome"] = "pass"
+
+    out = body()
+    assert out["ablation"]["active"] == ["CHAIN"]
+    assert out["ablation"]["config_id"] == "ABL-CHAIN"
+
+
+def test_tag_result_with_ablations_is_idempotent(monkeypatch):
+    """Multiple calls are safe — provenance state doesn't drift."""
+    for name in ("BIND", "CHAIN", "RECEIPT", "NONCE", "RATE"):
+        monkeypatch.delenv(f"PACT_ABLATION_{name}", raising=False)
+    monkeypatch.setenv("PACT_ABLATION_BIND", "1")
+    result = {}
+    tag_result_with_ablations(result)
+    first = dict(result["ablation"])
+    tag_result_with_ablations(result)
+    assert result["ablation"] == first

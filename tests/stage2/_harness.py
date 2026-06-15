@@ -170,7 +170,8 @@ def record_llm_call(
 def _new_result(probe_id, tier, pairing, prediction, threshold, citation,
                 classification, n_trials, trial_index) -> dict[str, Any]:
     """Fresh per-trial result skeleton with all pre-registration fields."""
-    return {
+    from tests.stage2 import _ablations as _ablation_harness
+    result = {
         "probe_id": probe_id,
         "tier": tier,
         "started_at_utc": datetime.now(UTC).isoformat(),
@@ -201,6 +202,11 @@ def _new_result(probe_id, tier, pairing, prediction, threshold, citation,
         "elapsed_s": None,
         "notes": "",
     }
+    # §12 ablation config — empty {"active": [], "config_id": "BASELINE"}
+    # for normal Phase A confirmatory runs; populated when the probe is
+    # invoked under an ABL-* config by scripts/run_phase_a.sh.
+    _ablation_harness.tag_result_with_ablations(result)
+    return result
 
 
 def _run_one_trial(fn, result, args, kwargs) -> None:
