@@ -464,6 +464,108 @@ def cross_share_identities(*handles: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cross-machine peer support (Stage 2 cross-tailnet probes)
+# ---------------------------------------------------------------------------
+#
+# Pattern: the Mac (probe-driving side) stands up its agent locally with
+# `stand_up_agent`; the remote agent (e.g., on the NUC over Tailscale) is
+# pre-spawned via `tests/stage2/_spawn_remote_agent` and reachable at a
+# known URL. The Mac probe then constructs a remote handle via
+# `stand_up_remote_agent(url, name)` which fetches the remote's
+# identity_doc over HTTP and returns a dict-shaped handle that probe
+# bodies can use interchangeably with a local `stand_up_agent` handle.
+#
+# Field compatibility:
+#   - agent_id, public_key, url, name      — present on both
+#   - identity (object) | identity_doc     — local has object, remote has dict
+#   - agent, server, private_key, store_dir — present on local only; None on remote
+#   - _remote = True flag on remote handles
+#
+# Probe bodies that use `nuc["private_key"]` must NOT use a remote handle
+# for that role — the remote keeps its private key. For most probe shapes
+# the Mac is the requester (uses its own private key) and the remote is
+# the responder (uses its own private key on its side, never exposed).
+
+def stand_up_remote_agent(url: str, name: str = "remote", timeout_s: float = 10.0) -> dict[str, Any]:
+    """Build a handle for a PACTAgent already running at `url`.
+
+    Fetches identity_doc via GET {url}/pact/v1/identity. Returns a handle
+    compatible with `stand_up_agent`'s for the fields probe bodies read
+    on a peer (agent_id, public_key, url, identity_doc). Local-only
+    fields (agent, server, private_key, store_dir) are None.
+
+    Args:
+        url: Base URL of the remote PACTServer (e.g., http://nucnode.tailcf96a0.ts.net:9101)
+        name: Logical label for the remote in result JSON / logs.
+        timeout_s: HTTP timeout for the identity fetch.
+
+    Raises:
+        urllib.error.URLError on transport failure.
+        KeyError if the fetched identity_doc is malformed.
+    """
+    import base64
+    import json
+    import urllib.request
+
+    fetch_url = url.rstrip("/") + "/pact/v1/identity"
+    with urllib.request.urlopen(fetch_url, timeout=timeout_s) as resp:
+        identity_doc = json.loads(resp.read())
+
+    return {
+        "name": name,
+        "agent": None,
+        "identity": None,
+        "identity_doc": identity_doc,
+        "agent_id": identity_doc["agent_id"],
+        "public_key": base64.b64decode(identity_doc["public_key"]),
+        "private_key": None,
+        "url": url,
+        "server": None,
+        "store_dir": None,
+        "_remote": True,
+    }
+
+
+def share_remote_identity_into(local_handle: dict, remote_handle: dict) -> None:
+    """Write the remote peer's identity_doc into the local agent's peer
+    store. One-way only — the remote auto-trusts via the `identity_doc`
+    field that the local agent inlines on each REQ (spec §6.2 v1.1
+    addition), so no NUC-side write is required.
+
+    Use this in place of `cross_share_identities` when one side is remote.
+    """
+    if local_handle.get("_remote"):
+        raise ValueError("local_handle is itself remote; need a local handle to populate")
+    if not remote_handle.get("_remote"):
+        raise ValueError("remote_handle is not remote; use cross_share_identities for two locals")
+    local_handle["agent"]._store.save_peer(
+        remote_handle["agent_id"],
+        remote_handle["identity_doc"],
+    )
+
+
+def maybe_remote_peer(name: str, env_var: str) -> dict | None:
+    """If `os.environ[env_var]` is set, build a remote handle pointing at
+    that URL; otherwise return None so the probe falls back to a local
+    `stand_up_agent`.
+
+    Probes use this for backwards-compatible cross-machine support:
+
+        nuc = maybe_remote_peer("nuc_runner", "STAGE2_NUC_URL") \
+              or stand_up_agent("nuc_runner", store_dir, host="127.0.0.1")
+
+    Setting `STAGE2_NUC_URL=http://nucnode.tailcf96a0.ts.net:9101`
+    in the env runs the probe cross-tailnet against a pre-spawned remote;
+    leaving it unset preserves loopback behavior.
+    """
+    import os
+    url = os.environ.get(env_var)
+    if not url:
+        return None
+    return stand_up_remote_agent(url, name=name)
+
+
+# ---------------------------------------------------------------------------
 # Run-dir summary writer (called by the runner after all probes complete)
 # ---------------------------------------------------------------------------
 
