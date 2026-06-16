@@ -31,7 +31,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from pact_passport import build_req, issue_capability, send_message
+from pact_passport import build_req, send_message
 
 from tests.stage2._harness import (
     maybe_remote_peer,
@@ -100,20 +100,14 @@ def run(result):
         share_remote_identity_into(mac, nuc)
 
         try:
-            # We need a handler registered on the NUC side. Since the NUC
-            # was spawned without any handlers, we can't actually serve
-            # this REQ usefully — UNLESS the NUC's spawn script registers
-            # a generic `echo` handler. For now, send to an intent that
-            # has built-in protocol handling (a malformed action will
-            # produce a structured `no_handler` error which is itself a
-            # valid round-trip — confirming the wire works).
-            cap = issue_capability(
-                issuer_private_key=mac["private_key"],
-                issuer_id=mac["agent_id"],
-                holder_id=nuc["agent_id"],
-                action="smoke_no_handler",
-            )
-
+            # No cap_envelope: PACT requires caps to be issued BY the
+            # receiver (NUC), and since we just spawned the NUC agent
+            # with no pre-shared caps, sending one Mac-issued would
+            # rightfully fail capability_invalid. The smoke instead
+            # sends a bare REQ to an action with no handler — the
+            # structured `no_handler` fault that comes back confirms
+            # transport, signature, peer trust (via inline identity_doc),
+            # and structured-fault path all work end-to-end.
             t0 = time.time()
             res = send_message(nuc["url"], build_req(
                 from_private_key=mac["private_key"],
@@ -122,8 +116,6 @@ def run(result):
                 intent="task",
                 payload={"action": "smoke_no_handler",
                          "msg": "cross-tailnet smoke from Mac"},
-                cap_envelope=cap.to_dict(),
-                holder_proof_key=mac["private_key"],
                 identity_doc=mac["identity"].to_identity_document(),
             ))
             wall_clock_s = round(time.time() - t0, 3)
