@@ -132,10 +132,22 @@ log "  (clean) terminate any prior _spawn_remote_agent on NUC"
 ssh "$NUC_SSH_HOST" 'powershell -NoProfile -Command "(Get-Process python -ErrorAction SilentlyContinue) | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction Stop } catch {} }"' 2>/dev/null || true
 sleep 1
 
+# Probe-specific NUC spawn module. R1 cross-machine needs handlers +
+# test-control endpoints; X1 smoke uses the plain spawn. Add new
+# entries here when adding cross-machine probes.
+NUC_SPAWN_MODULE="tests.stage2._spawn_remote_agent"
+for p in "${XMACHINE_PROBES[@]}"; do
+    case "$p" in
+        probe_r1_xmachine_replay) NUC_SPAWN_MODULE="tests.stage2._spawn_r1_remote" ;;
+    esac
+done
+log "  using NUC spawn module: ${NUC_SPAWN_MODULE}"
+
 SPAWN_CMD=$(cat <<EOF
 cd ${NUC_REPO_PATH} && \
+git fetch origin && git reset --hard origin/main && \
 source .venv/Scripts/activate && \
-python -m tests.stage2._spawn_remote_agent ${NUC_AGENT_NAME} --port ${NUC_AGENT_PORT}
+python -m ${NUC_SPAWN_MODULE} ${NUC_AGENT_NAME} --port ${NUC_AGENT_PORT}
 EOF
 )
 # Background the SSH itself. We don't care about its return; we poll
