@@ -243,11 +243,12 @@ if [[ $RUN_NUC_LOOPBACK -eq 1 ]]; then
     log "=== 5. NUC loopback Phase A matrix (via SSH) ==="
     NUC_RUN_CMD=$(cat <<EOF
 cd ${NUC_REPO_PATH} && \
+git fetch origin && git reset --hard origin/main && \
 source .venv/Scripts/activate && \
 ./scripts/run_phase_a.sh --probe probe_attr_ablations
 EOF
     )
-    ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc \"${NUC_RUN_CMD}\"" 2>&1 | tail -20
+    ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc \"${NUC_RUN_CMD}\"" 2>&1 | tail -25
 
     # Pull the latest results dir back. tar streams over SSH.
     log "  pulling NUC results back to $OUT_ROOT/nuc/"
