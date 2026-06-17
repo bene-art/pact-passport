@@ -128,7 +128,7 @@ def run(result):
     nuc_test_url = os.environ.get("STAGE2_NUC_TEST_URL")
     if not nuc_test_url:
         # Default: parse nuc_url + add 1 to port.
-        host, sep, port = nuc_url.rsplit(":", 1)
+        host, port = nuc_url.rsplit(":", 1)
         nuc_test_url = f"{host}:{int(port) + 1}"
 
     mac_ts_ip = _mac_tailscale_ip()
