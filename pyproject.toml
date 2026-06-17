@@ -9,7 +9,7 @@ description = "PACT Passport — agent ID. Self-certifying identity, holder-boun
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
-authors = [{name = "Benjamin Easington"}]
+authors = [{name = "bene-art", email = "bene-art@users.noreply.github.com"}]
 keywords = ["agent", "trust", "capability", "protocol", "identity", "ed25519", "pact"]
 classifiers = [
     "Development Status :: 4 - Beta",

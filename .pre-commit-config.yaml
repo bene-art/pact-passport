@@ -1,0 +1,23 @@
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: ^(\.secrets\.baseline|tests/.*\.json|tests/stage2/results.*|references/.*\.pdf)$
+
+  - repo: local
+    hooks:
+      - id: internal-vocab-scrub
+        name: Block internal/private vocabulary
+        entry: bash -c 'matches=$(grep -REn -i --include="*.py" --include="*.md" --include="*.yaml" --include="*.yml" --include="*.toml" --include="*.json" --include="*.sh" --include="*.txt" --include="*.cfg" --include="*.ini" -e "\bGhana\b" -e "\bbrother\b" -e "\bBenAi\b" -e "\bCommander\b" -e "\bPatrick\b" -e "\bHermes\b" -e "benai_local" -e "\.benai_local" -e "FructuraCycle" -e "/Users/benjamineasington/" "$@" 2>/dev/null); if [ -n "$matches" ]; then echo "Internal vocab found:"; echo "$matches"; exit 1; fi' --
+        language: system
+        pass_filenames: true
+        exclude: ^\.pre-commit-config\.yaml$
+
+      - id: stage2-host-field-block
+        name: Block 'host' field in stage2 probe JSON (per B3 plan)
+        entry: bash -c 'matches=$(grep -REn "\"host\"\s*:" "$@" 2>/dev/null); if [ -n "$matches" ]; then echo "Probe JSON contains host field — strip before commit:"; echo "$matches"; exit 1; fi' --
+        language: system
+        files: ^tests/stage2/.*\.json$
+        pass_filenames: true
