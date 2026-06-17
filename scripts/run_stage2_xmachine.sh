@@ -250,14 +250,28 @@ EOF
     )
     ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc \"${NUC_RUN_CMD}\"" 2>&1 | tail -25
 
-    # Pull the latest results dir back. tar streams over SSH.
+    # Pull the latest results dir back via scp.
+    # NOTE: tar c | tar x streams over SSH would be cleaner, but the
+    # tar invocation via Git-Bash-on-Windows-OpenSSH hit empty-output
+    # silently in testing 2026-06-17. scp with a Windows-style path
+    # (`nuc:C:/projects/...` rather than `nuc:/c/projects/...`) is
+    # reliable — the SFTP subsystem on Windows OpenSSH parses both
+    # forms but recursion + read works only with the C:/ form.
     log "  pulling NUC results back to $OUT_ROOT/nuc/"
-    nuc_latest=$(ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc 'ls -dt ${NUC_REPO_PATH}/tests/stage2/results_phase_a_2* | head -1'" 2>/dev/null | tr -d '\r')
-    if [[ -n "$nuc_latest" ]]; then
-        ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc 'cd ${NUC_REPO_PATH} && tar c -C $(dirname $nuc_latest) $(basename $nuc_latest)'" | tar x -C "$OUT_ROOT/nuc/"
-        log "  pulled $(basename $nuc_latest)"
+    nuc_latest_bash=$(ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc 'ls -dt ${NUC_REPO_PATH}/tests/stage2/results_phase_a_2* | head -1'" 2>/dev/null | tr -d '\r' | tail -1)
+    if [[ -n "$nuc_latest_bash" ]]; then
+        # Convert /c/projects/... -> C:/projects/... for scp. macOS sed
+        # lacks \U so use tr for the case conversion explicitly.
+        drive=$(echo "$nuc_latest_bash" | sed -E 's|^/([a-z])/.*|\1|' | tr '[:lower:]' '[:upper:]')
+        rest=$(echo "$nuc_latest_bash" | sed -E 's|^/[a-z]/||')
+        nuc_latest_win="${drive}:/${rest}"
+        if scp -r "${NUC_SSH_HOST}:${nuc_latest_win}" "$OUT_ROOT/nuc/" 2>&1 | tail -5; then
+            log "  pulled $(basename $nuc_latest_bash)"
+        else
+            warn "scp pull failed; results stay on NUC at $nuc_latest_bash"
+        fi
     else
-        warn "NUC loopback results not found"
+        warn "NUC loopback results not found on NUC"
     fi
 fi
 
