@@ -265,10 +265,18 @@ EOF
         drive=$(echo "$nuc_latest_bash" | sed -E 's|^/([a-z])/.*|\1|' | tr '[:lower:]' '[:upper:]')
         rest=$(echo "$nuc_latest_bash" | sed -E 's|^/[a-z]/||')
         nuc_latest_win="${drive}:/${rest}"
-        if scp -r "${NUC_SSH_HOST}:${nuc_latest_win}" "$OUT_ROOT/nuc/" 2>&1 | tail -5; then
-            log "  pulled $(basename $nuc_latest_bash)"
+        log "  scp source: ${NUC_SSH_HOST}:${nuc_latest_win}"
+        # NOTE: capture scp output to a variable so its exit status (not
+        # tail's) decides the if-branch. Piping to `tail` made every run
+        # report "pulled" even when scp silently produced 0 files.
+        scp_out=$(scp -r "${NUC_SSH_HOST}:${nuc_latest_win}" "$OUT_ROOT/nuc/" 2>&1)
+        scp_rc=$?
+        if [[ $scp_rc -eq 0 ]]; then
+            n_pulled=$(find "$OUT_ROOT/nuc/" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+            log "  pulled $(basename $nuc_latest_bash) — $n_pulled JSON files"
         else
-            warn "scp pull failed; results stay on NUC at $nuc_latest_bash"
+            warn "scp pull failed (rc=$scp_rc); results stay on NUC at $nuc_latest_bash"
+            echo "$scp_out" | head -5 >&2
         fi
     else
         warn "NUC loopback results not found on NUC"
