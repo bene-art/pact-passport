@@ -54,6 +54,7 @@ RUN_NUC_LOOPBACK=0
 RUN_MAC_LOOPBACK=0
 DRY_RUN=0
 ONLY_PROBE=""
+NUC_ENV_VARS=()  # KEY=VALUE strings passed inline to the NUC spawn
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -64,6 +65,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)          DRY_RUN=1; shift ;;
         --nuc-host)         NUC_TS_HOST="$2"; shift 2 ;;
         --nuc-port)         NUC_AGENT_PORT="$2"; shift 2 ;;
+        --nuc-env)          NUC_ENV_VARS+=("$2"); shift 2 ;;
         -h|--help)
             grep '^#' "$0" | sed 's/^# \?//'
             exit 0
@@ -71,6 +73,13 @@ while [[ $# -gt 0 ]]; do
         *) die "unknown arg: $1" ;;
     esac
 done
+
+# Build the env-prefix the NUC spawn command will see, e.g.:
+#   PACT_ABLATION_BIND=1 PACT_ABLATION_NONCE=1
+NUC_ENV_PREFIX=""
+if [[ ${#NUC_ENV_VARS[@]} -gt 0 ]]; then
+    NUC_ENV_PREFIX="${NUC_ENV_VARS[*]}"
+fi
 
 [[ -n "$ONLY_PROBE" ]] && XMACHINE_PROBES=("$ONLY_PROBE")
 
@@ -138,7 +147,9 @@ sleep 1
 NUC_SPAWN_MODULE="tests.stage2._spawn_remote_agent"
 for p in "${XMACHINE_PROBES[@]}"; do
     case "$p" in
-        probe_r1_xmachine_replay) NUC_SPAWN_MODULE="tests.stage2._spawn_r1_remote" ;;
+        probe_r1_xmachine_replay|probe_attr_bind_xmachine|probe_attr_nonce_xmachine)
+            NUC_SPAWN_MODULE="tests.stage2._spawn_r1_remote"
+            ;;
     esac
 done
 log "  using NUC spawn module: ${NUC_SPAWN_MODULE}"
@@ -147,9 +158,10 @@ SPAWN_CMD=$(cat <<EOF
 cd ${NUC_REPO_PATH} && \
 git fetch origin && git reset --hard origin/main && \
 source .venv/Scripts/activate && \
-python -m ${NUC_SPAWN_MODULE} ${NUC_AGENT_NAME} --port ${NUC_AGENT_PORT}
+${NUC_ENV_PREFIX} python -m ${NUC_SPAWN_MODULE} ${NUC_AGENT_NAME} --port ${NUC_AGENT_PORT}
 EOF
 )
+[[ -n "$NUC_ENV_PREFIX" ]] && log "  NUC env: ${NUC_ENV_PREFIX}"
 # Background the SSH itself. We don't care about its return; we poll
 # /pact/v1/health for readiness. SSH may hang waiting for the python
 # process to exit — that's fine, the orchestrator doesn't wait on it.
