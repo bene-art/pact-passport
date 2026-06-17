@@ -53,8 +53,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from pact_passport import build_req, send_message
-from pact_passport.capability import issue_capability
+from datetime import UTC, datetime, timedelta
+
+from pact_passport import build_req, crypto, send_message
+from pact_passport.capability import Caveat, issue_capability
+from pact_passport.visa import issue_visa
 
 from tests.stage2._harness import stand_up_agent
 
@@ -260,6 +263,27 @@ def main(argv: list[str] | None = None) -> int:
                 action=action,
             )
             _ISSUED_CAPS[action] = cap.to_dict()
+        # Also pre-issue a visa for the cross-machine ATTR_NONCE probe.
+        # ATTR_NONCE attacks the visa-nonce holder-proof binding: the
+        # probe presents the visa + a holder_proof signed over wrong
+        # bytes. Default rejects with holder_proof_invalid; PACT_ABLATION_NONCE=1
+        # accepts. Visa uses Mac's identity pubkey as the ephemeral key
+        # — fine for this test because we're not exercising key rotation.
+        mac_pub_bytes = base64.b64decode(mac_identity_doc["public_key"])
+        expires_iso = (datetime.now(UTC) + timedelta(seconds=300)).isoformat()
+        visa = issue_visa(
+            issuer_private_key=handle["private_key"],
+            issuer_id=handle["agent_id"],
+            holder_id=mac_identity_doc["agent_id"],
+            action="reformulate",
+            caveats=[
+                Caveat(restrict="expires", value=expires_iso),
+                Caveat(restrict="max_invocations", value=1),
+                Caveat(restrict="no_further_delegation", value=True, terminal=True),
+            ],
+            ephemeral_key_fingerprint=crypto.sha256_digest(mac_pub_bytes),
+        )
+        _ISSUED_CAPS["visa"] = visa.to_dict()
 
     _PEER_STATE.set_peer = _set_peer_and_issue_caps  # type: ignore[assignment]
 
