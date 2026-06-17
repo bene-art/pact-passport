@@ -258,7 +258,11 @@ EOF
     # reliable — the SFTP subsystem on Windows OpenSSH parses both
     # forms but recursion + read works only with the C:/ form.
     log "  pulling NUC results back to $OUT_ROOT/nuc/"
-    nuc_latest_bash=$(ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc 'ls -dt ${NUC_REPO_PATH}/tests/stage2/results_phase_a_2* | head -1'" 2>/dev/null | tr -d '\r' | tail -1)
+    # IMPORTANT: || true tolerates the inner SSH returning non-zero,
+    # which otherwise propagates through pipefail and trips set -e at
+    # the assignment (exit 255). We'd rather warn and continue than
+    # silently teardown without surfacing the failure.
+    nuc_latest_bash=$( { ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc 'ls -dt ${NUC_REPO_PATH}/tests/stage2/results_phase_a_2* 2>/dev/null | head -1'" 2>/tmp/nuc_pull_ssh_err_$$ || true; } | tr -d '\r' | tail -1 )
     if [[ -n "$nuc_latest_bash" ]]; then
         # Convert /c/projects/... -> C:/projects/... for scp. macOS sed
         # lacks \U so use tr for the case conversion explicitly.
