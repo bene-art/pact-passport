@@ -248,7 +248,13 @@ source .venv/Scripts/activate && \
 ./scripts/run_phase_a.sh --probe probe_attr_ablations
 EOF
     )
-    ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc \"${NUC_RUN_CMD}\"" 2>&1 | tail -25
+    # Capture SSH output to parse the "results:" line for the result
+    # dir path. A second SSH call to ls -dt the directory hits flaky
+    # behavior right after the matrix's control-master closes
+    # (returns empty even though the dir exists). Reading the path
+    # from the script's own output is reliable.
+    nuc_run_out=$(ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc \"${NUC_RUN_CMD}\"" 2>&1) || true
+    echo "$nuc_run_out" | tail -25
 
     # Pull the latest results dir back via scp.
     # NOTE: tar c | tar x streams over SSH would be cleaner, but the
@@ -258,11 +264,14 @@ EOF
     # reliable — the SFTP subsystem on Windows OpenSSH parses both
     # forms but recursion + read works only with the C:/ form.
     log "  pulling NUC results back to $OUT_ROOT/nuc/"
-    # IMPORTANT: || true tolerates the inner SSH returning non-zero,
-    # which otherwise propagates through pipefail and trips set -e at
-    # the assignment (exit 255). We'd rather warn and continue than
-    # silently teardown without surfacing the failure.
-    nuc_latest_bash=$( { ssh "$NUC_SSH_HOST" "\"${NUC_GIT_BASH}\" -lc 'ls -dt ${NUC_REPO_PATH}/tests/stage2/results_phase_a_2* 2>/dev/null | head -1'" 2>/tmp/nuc_pull_ssh_err_$$ || true; } | tr -d '\r' | tail -1 )
+    # Parse the result dir from run_phase_a's own output. Format:
+    #   [<UTC>] results: tests/stage2/results_phase_a_<UTC-ts>
+    nuc_results_rel=$(echo "$nuc_run_out" | grep -E '^\[.*\][[:space:]]+results:' | tail -1 | sed -E 's|.*results:[[:space:]]+||' | tr -d '\r')
+    if [[ -n "$nuc_results_rel" ]]; then
+        nuc_latest_bash="${NUC_REPO_PATH}/${nuc_results_rel}"
+    else
+        nuc_latest_bash=""
+    fi
     if [[ -n "$nuc_latest_bash" ]]; then
         # Convert /c/projects/... -> C:/projects/... for scp. macOS sed
         # lacks \U so use tr for the case conversion explicitly.
