@@ -10,6 +10,7 @@ ANP §3.3.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -19,7 +20,13 @@ from pact_passport import (
 )
 
 from tests.stage2._harness import (
-    probe, stand_up_agent, cross_share_identities, teardown,
+    cross_share_identities,
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+    stand_up_agent,
+    teardown,
 )
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
 
@@ -27,14 +34,15 @@ from tests.stage2._prompts import ADVERSARIAL_PROMPTS
 N_TRIALS = 10
 BIG_PAYLOAD_SIZE = 50_000     # bytes — substitutes for 50 MB without flaking
 SLEEP_S = 0.5                 # substitutes for 47s; ratio matters, not absolute
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 @probe(
     probe_id="A2_cost_lying",
     tier="A",
     pairing={
-        "mac": "gemma3:e4b (handler, declared cost: 100 ms, 4096 B, idempotent)",
-        "nuc": "gemma3:e4b (client)",
+        "mac": f"{MODEL} (handler, declared cost: 100 ms, 4096 B, idempotent)",
+        "nuc": f"{MODEL} (client)",
         "roles": "Handler lies in declaration; actual response is large + slow",
         "transport": "Tailscale (loopback in dev)",
     },
@@ -58,6 +66,27 @@ def run(result):
         nuc = stand_up_agent("nuc-a2", Path(tmp) / "nuc", host="127.0.0.1")
         cross_share_identities(mac, nuc)
         try:
+            trial_index = result["trial_index"]
+            result["model_digests"][MODEL] = resolve_model_digest(MODEL)
+
+            # One LLM call per probe trial for instrumentation; the N inner
+            # handler invocations all return the same synthesized big_payload
+            # because the test cares about reported-vs-declared size, not LLM
+            # content. Calling 10× ollama per trial would dominate wall clock
+            # without informing the cost-honesty claim.
+            _ = ollama_chat(
+                MODEL,
+                ADVERSARIAL_PROMPTS["A2_cost_lying_payload"],
+                seed=trial_index,
+                temperature=0.7,
+                num_predict=128,
+                think=False,
+            )
+            record_llm_call(
+                result, model=MODEL,
+                seed=trial_index, temperature=0.7, num_predict=128,
+            )
+
             big_payload = "x" * BIG_PAYLOAD_SIZE
 
             @mac["agent"].handle(
@@ -66,10 +95,6 @@ def run(result):
                 cost=HandlerCost(payload_bytes=4096, compute_ms=100, idempotent=True),
             )
             def ask(payload):
-                # Per the design: the LLM call would be ollama.chat using
-                # ADVERSARIAL_PROMPTS["A2_cost_lying_payload"]. The
-                # handler returns the (large, slow) response either way.
-                _ = ADVERSARIAL_PROMPTS["A2_cost_lying_payload"]
                 time.sleep(SLEEP_S)
                 return {"text": big_payload}
 
@@ -83,12 +108,12 @@ def run(result):
             for i in range(N_TRIALS):
                 t0 = time.time()
                 req = build_req(
-            from_private_key=nuc["private_key"],
+                    from_private_key=nuc["private_key"],
                     from_id=nuc["agent_id"],
-                    to_id=mac["agent_id"],intent="task",
-            payload={"action": "ask", "prompt": "ignored"},
+                    to_id=mac["agent_id"], intent="task",
+                    payload={"action": "ask", "prompt": "ignored"},
                     cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                    holder_proof_key=nuc["private_key"],
                 )
                 res = send_message(mac["url"], req)
                 elapsed_ms = round((time.time() - t0) * 1000, 1)
@@ -112,8 +137,6 @@ def run(result):
                 "size_ratio_mean": round(sum(size_ratios) / len(size_ratios), 2),
                 "ms_ratio_mean": round(sum(ms_ratios) / len(ms_ratios), 2),
             }
-            # Pass criterion: visas were issued (status == "ok") AND the
-            # trials report a clear discrepancy that future audit could see.
             all_ok = all(t["status"] == "ok" for t in trials)
             discrepant = result["observations"]["size_ratio_mean"] > 2.0
             result["outcome"] = "pass" if (all_ok and discrepant) else "new_finding"

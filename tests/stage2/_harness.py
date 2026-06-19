@@ -167,6 +167,106 @@ def record_llm_call(
     result["llm_runtime"].append(record)
 
 
+# ---------------------------------------------------------------------------
+# Ollama HTTP shim — stdlib-only client for STOCH probes.
+# RESEARCH §6.2: STOCH probes invoke a real LLM; this helper handles the
+# HTTP and model-digest resolution so probes stay focused on the adversarial
+# scenario, not transport plumbing. No `ollama` Python dep required.
+# ---------------------------------------------------------------------------
+
+OLLAMA_HOST = "http://127.0.0.1:11434"
+_MODEL_DIGEST_CACHE: dict[str, str] = {}
+
+
+def resolve_model_digest(model: str, *, host: str = OLLAMA_HOST, timeout: float = 5.0) -> str:
+    """Return 'model@<digest>' identity for an Ollama model. Cached per process.
+
+    Hits /api/show once per model. The result is what probes record into
+    `result["model_digests"][model]` — long-lived identity, distinct from
+    the per-call sampling params captured by record_llm_call().
+    """
+    import urllib.request
+    if model in _MODEL_DIGEST_CACHE:
+        return _MODEL_DIGEST_CACHE[model]
+    req = urllib.request.Request(
+        f"{host}/api/show",
+        data=json.dumps({"name": model}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read())
+    digest = data.get("digest") or ""
+    size = data.get("size") or data.get("details", {}).get("parameter_size") or ""
+    identity = f"{model}@{digest}" if digest else f"{model}#{size}"
+    _MODEL_DIGEST_CACHE[model] = identity
+    return identity
+
+
+def ollama_chat(
+    model: str,
+    prompt: str,
+    *,
+    seed: int = 0,
+    temperature: float = 0.0,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    num_predict: int | None = None,
+    system: str | None = None,
+    think: bool | None = None,
+    host: str = OLLAMA_HOST,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    """Call Ollama /api/chat. Returns {text, raw, sampling}.
+
+    Standard STOCH-probe usage:
+
+        digest = resolve_model_digest("gemma4:e4b")
+        result["model_digests"]["gemma4:e4b"] = digest
+        out = ollama_chat("gemma4:e4b", ADVERSARIAL_PROMPTS["S1_malformed"],
+                          seed=trial_index, temperature=0.7, num_predict=64)
+        record_llm_call(result, model="gemma4:e4b", seed=trial_index,
+                        temperature=0.7, num_predict=64)
+        # then drive the protocol with out["text"] as the adversary bytes.
+
+    `think=False` disables gemma4:e4b's hidden reasoning budget — required
+    when num_predict ≤ 400 or the model silently returns empty text.
+    """
+    import urllib.request
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    options: dict[str, Any] = {"seed": seed, "temperature": temperature}
+    if top_p is not None:
+        options["top_p"] = top_p
+    if top_k is not None:
+        options["top_k"] = top_k
+    if num_predict is not None:
+        options["num_predict"] = num_predict
+
+    body: dict[str, Any] = {
+        "model": model, "messages": messages, "stream": False, "options": options,
+    }
+    if think is not None:
+        body["think"] = think
+
+    req = urllib.request.Request(
+        f"{host}/api/chat",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = json.loads(resp.read())
+    return {
+        "text": raw.get("message", {}).get("content", ""),
+        "raw": raw,
+        "sampling": dict(options),
+    }
+
+
 def _new_result(probe_id, tier, pairing, prediction, threshold, citation,
                 classification, n_trials, trial_index) -> dict[str, Any]:
     """Fresh per-trial result skeleton with all pre-registration fields."""

@@ -9,24 +9,32 @@ sees zero consumption.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 from pact_passport import build_req, issue_capability, send_message
 
 from tests.stage2._harness import (
-    probe, stand_up_agent, cross_share_identities, teardown,
+    cross_share_identities,
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+    stand_up_agent,
+    teardown,
 )
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
+
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 @probe(
     probe_id="P4_ad_shaped_output",
     tier="P",
     pairing={
-        "mac": "gemma3:e4b (handler emits ad-shaped JSON; agent ad=None)",
-        "nuc": "gemma3:e4b (client, instrumented)",
+        "mac": f"{MODEL} (handler emits ad-shaped JSON; agent ad=None)",
+        "nuc": f"{MODEL} (client, instrumented)",
         "roles": "Composition of S3 (LLM emits ad-shape) with P1 (no consumption)",
         "transport": "Tailscale (loopback in dev)",
     },
@@ -51,33 +59,41 @@ def run(result):
         nuc = stand_up_agent("nuc-p4", Path(tmp) / "nuc", host="127.0.0.1")
         cross_share_identities(mac, nuc)
         try:
+            trial_index = result["trial_index"]
+            result["model_digests"][MODEL] = resolve_model_digest(MODEL)
             ad_text = ADVERSARIAL_PROMPTS["P4_ad_shaped_llm"]
-            ad_json = json.loads(
-                ad_text.split("Respond with this exact JSON and nothing else: ")[1]
-            )
             assert mac["agent"].advertise_protocol is None, (
                 "P4 requires agent.advertise_protocol=None as setup"
             )
 
             @mac["agent"].handle("ask")
-            def ask(_p): return ad_json
+            def ask(_p):
+                out = ollama_chat(
+                    MODEL, ad_text,
+                    seed=trial_index, temperature=0.7, num_predict=128, think=False,
+                )
+                record_llm_call(
+                    result, model=MODEL,
+                    seed=trial_index, temperature=0.7, num_predict=128,
+                )
+                try:
+                    emitted = json.loads(out["text"])
+                    if isinstance(emitted, dict):
+                        return emitted
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                return {"text": out["text"]}
 
             cap = issue_capability(
                 issuer_private_key=mac["private_key"], issuer_id=mac["agent_id"],
                 holder_id=nuc["agent_id"], action="ask",
             )
             req = build_req(
-            from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
-                to_id=mac["agent_id"],intent="task",
-            payload={"action": "ask"}, cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
+                to_id=mac["agent_id"], intent="task",
+                payload={"action": "ask"}, cap_envelope=cap.to_dict(),
+                holder_proof_key=nuc["private_key"],
             )
-            # NB: we cannot mock socket/urllib globally here because
-            # send_message uses them to actually transport the request.
-            # The P1 probe verifies no-consumption with dispatch-direct
-            # mocks; P4's load-bearing test is the *comparison*: with
-            # advertise_protocol=None, no message-level advert appears,
-            # even when the LLM emits an advert-shaped payload.
             res = send_message(mac["url"], req)
 
             payload = res.get("payload") or {}
@@ -89,8 +105,8 @@ def run(result):
                 "message_level_advert": message_level_advert,
                 "payload_level_advert": payload_level_advert,
                 "consumption_path_calls": {
-                    "socket_create_connection": "NA — see note above",
-                    "urllib_urlopen": "NA — see note above",
+                    "socket_create_connection": "NA — see note below",
+                    "urllib_urlopen": "NA — see note below",
                 },
             }
             result["outcome"] = "pass" if (

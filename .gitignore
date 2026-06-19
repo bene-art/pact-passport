@@ -16,3 +16,11 @@ htmlcov/
 # Stage 2 probe result JSON dirs — provenance-stamped, may include local
 # hostnames; never commit. Each probe run creates results_<UTC-ts>/.
 tests/stage2/results_*/
+
+# Stage 2 Phase B adversary loop result dirs — provenance-stamped, may
+# include local hostnames + DeepInfra usage records. Never commit.
+tests/stage2/adversary_runs/
+tests/stage2/adversary_runs_NUC/
+
+# M1 K-sweep one-off runner output (Phase 8 / D4 supplement).
+tests/stage2/m1_k_sweep_*.json

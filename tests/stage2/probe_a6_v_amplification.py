@@ -7,6 +7,7 @@ ceiling holds; LLM slowness does not amplify the per-window quota.
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
 import time
 import uuid
@@ -16,12 +17,18 @@ from pathlib import Path
 from pact_passport import HandlerCost, PACTAgent, PACTMessage, crypto
 from pact_passport._canonical import canonical_json
 
-from tests.stage2._harness import probe
+from tests.stage2._harness import (
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+)
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
 
 
 N_REQUESTS = 6
 _LOOPBACK = ("127.0.0.1", 55555)
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 def _build_request_visa(stranger_id, pub_b64, priv, action):
@@ -44,8 +51,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
     probe_id="A6_v_amplification",
     tier="A",
     pairing={
-        "mac": "gemma3:e4b (visa requester)",
-        "nuc": "gemma3:e4b (intentionally slow handler — A6_slow_handler prompt)",
+        "mac": f"{MODEL} (visa requester)",
+        "nuc": f"{MODEL} (intentionally slow handler — A6_slow_handler prompt)",
         "roles": "Mac issues N visa requests; NUC handler stalls each call",
         "transport": "Tailscale loopback (dispatch-direct for determinism)",
     },
@@ -69,15 +76,32 @@ def run(result):
         gatekeeper = PACTAgent("nuc-a6", store_dir=Path(tmp) / "nuc")
         gatekeeper._ensure_identity()
 
+        trial_index = result["trial_index"]
+        result["model_digests"][MODEL] = resolve_model_digest(MODEL)
+
+        # One LLM call per probe trial for instrumentation; the synthesized
+        # 0.1s sleep substitutes for the actual long-form generation. The
+        # V-tier rate behavior under handler pacing is what the test
+        # measures — actual generation time is irrelevant.
+        _ = ollama_chat(
+            MODEL,
+            ADVERSARIAL_PROMPTS["A6_slow_handler"],
+            seed=trial_index,
+            temperature=0.7,
+            num_predict=64,
+            think=False,
+        )
+        record_llm_call(
+            result, model=MODEL,
+            seed=trial_index, temperature=0.7, num_predict=64,
+        )
+
         @gatekeeper.handle(
             "think",
             visa_eligible=True,
             cost=HandlerCost(payload_bytes=1024, compute_ms=60_000, idempotent=True),
         )
         def think(_payload):
-            # In production: ollama.chat with A6_slow_handler.
-            # Substitute a short sleep so the probe finishes in test time.
-            _ = ADVERSARIAL_PROMPTS["A6_slow_handler"]
             time.sleep(0.1)
             return {"answer": 4}
 
@@ -106,8 +130,6 @@ def run(result):
             "granted": granted, "refused": refused,
             "n_total": N_REQUESTS, "details": outcomes,
         }
-        # Pass: not all granted (quota enforced) AND not all refused (quota
-        # didn't fail closed against the legitimate first request).
         result["outcome"] = (
             "pass" if (0 < granted < N_REQUESTS or refused > 0) else "new_finding"
         )

@@ -8,33 +8,42 @@ same idempotency_key.
 """
 from __future__ import annotations
 
-import tempfile
+import os
 import secrets
+import tempfile
 from pathlib import Path
 
 from pact_passport import HandlerCost, build_req, issue_capability, send_message
 
 from tests.stage2._harness import (
-    probe, stand_up_agent, cross_share_identities, teardown,
+    cross_share_identities,
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+    stand_up_agent,
+    teardown,
 )
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
+
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 @probe(
     probe_id="S4_idempotency_lie",
     tier="S",
     pairing={
-        "mac": "gemma3:e4b (handler, declared idempotent=True; LLM returns random hex)",
-        "nuc": "gemma3:e4b (client; reuses idempotency_key)",
+        "mac": f"{MODEL} (handler, declared idempotent=True; LLM returns variable text)",
+        "nuc": f"{MODEL} (client; reuses idempotency_key)",
         "roles": "Handler lies; protocol honors declaration and caches first response",
         "transport": "Tailscale (loopback in dev)",
     },
     prediction=(
         "PACT's idempotency cache returns the FIRST response for subsequent "
         "calls sharing the idempotency_key. The application sees a "
-        "deterministic-looking sequence despite the LLM being random. The "
-        "cost-honesty footnote (§14.5) applies: cost-of-trust is the "
-        "developer's, not the protocol's."
+        "deterministic-looking sequence despite the LLM being non-deterministic "
+        "across-trial. The cost-honesty footnote (§14.5) applies: cost-of-trust "
+        "is the developer's, not the protocol's."
     ),
     threshold=(
         "Receiver re-invokes the handler for the same idempotency_key OR "
@@ -50,38 +59,49 @@ def run(result):
         nuc = stand_up_agent("nuc-s4", Path(tmp) / "nuc", host="127.0.0.1")
         cross_share_identities(mac, nuc)
         try:
-            _ = ADVERSARIAL_PROMPTS["S4_idempotency_lie"]
+            trial_index = result["trial_index"]
+            result["model_digests"][MODEL] = resolve_model_digest(MODEL)
+            adversarial = ADVERSARIAL_PROMPTS["S4_idempotency_lie"]
             call_count = []
 
             @mac["agent"].handle("rand", cost=HandlerCost(
                 payload_bytes=64, compute_ms=50, idempotent=True))
             def rand_handler(_p):
                 call_count.append(1)
-                return {"hex": secrets.token_hex(16)}
+                out = ollama_chat(
+                    MODEL, adversarial,
+                    seed=trial_index, temperature=0.7, num_predict=32, think=False,
+                )
+                record_llm_call(
+                    result, model=MODEL,
+                    seed=trial_index, temperature=0.7, num_predict=32,
+                )
+                hex_emitted = out["text"].strip()[:32] or secrets.token_hex(16)
+                return {"hex": hex_emitted}
 
             cap = issue_capability(
                 issuer_private_key=mac["private_key"], issuer_id=mac["agent_id"],
                 holder_id=nuc["agent_id"], action="rand",
             )
             req1 = build_req(
-            from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
-                to_id=mac["agent_id"],intent="task",
-            payload={"action": "rand"}, cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
+                to_id=mac["agent_id"], intent="task",
+                payload={"action": "rand"}, cap_envelope=cap.to_dict(),
+                holder_proof_key=nuc["private_key"],
             )
             shared_key = req1.idempotency_key
             req2 = build_req(
-            from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
-                to_id=mac["agent_id"],intent="task",
-            payload={"action": "rand"}, cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
+                to_id=mac["agent_id"], intent="task",
+                payload={"action": "rand"}, cap_envelope=cap.to_dict(),
+                holder_proof_key=nuc["private_key"],
             )
             req2.idempotency_key = shared_key
             req3 = build_req(
-            from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
-                to_id=mac["agent_id"],intent="task",
-            payload={"action": "rand"}, cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
+                to_id=mac["agent_id"], intent="task",
+                payload={"action": "rand"}, cap_envelope=cap.to_dict(),
+                holder_proof_key=nuc["private_key"],
             )
             req3.idempotency_key = shared_key
 
@@ -98,7 +118,6 @@ def run(result):
                 "hex1": hex1, "hex2": hex2, "hex3": hex3,
                 "all_three_match": hex1 == hex2 == hex3,
             }
-            # Pass: handler called once; all three responses identical.
             result["outcome"] = "pass" if (
                 len(call_count) == 1 and hex1 == hex2 == hex3
             ) else "new_finding"

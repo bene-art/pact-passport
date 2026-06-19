@@ -38,8 +38,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
     probe_id="V_llm_refuse",
     tier="V",
     pairing={
-        "mac": "gemma3:e4b (handler, idempotent=False)",
-        "nuc": "gemma3:e4b (visa requester)",
+        "mac": "gemma4:e4b (handler, idempotent=False; no LLM call in test path)",
+        "nuc": "gemma4:e4b (visa requester)",
         "roles": "Default policy must REFUSE a non-idempotent LLM handler",
         "transport": "loopback dispatch (deterministic)",
     },

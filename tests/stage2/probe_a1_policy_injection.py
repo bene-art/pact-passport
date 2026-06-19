@@ -10,6 +10,7 @@ corruption; Greshake et al. 2023.
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -18,11 +19,17 @@ from pathlib import Path
 from pact_passport import HandlerCost, PACTAgent, PACTMessage, crypto
 from pact_passport._canonical import canonical_json
 
-from tests.stage2._harness import probe
+from tests.stage2._harness import (
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+)
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
 
 MAC_HOST = "0.0.0.0"
 _LOOPBACK = ("127.0.0.1", 55555)
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 def _build_request_visa(stranger_id, pub_b64, priv, action):
@@ -45,8 +52,8 @@ def _build_request_visa(stranger_id, pub_b64, priv, action):
     probe_id="A1_policy_injection",
     tier="A",
     pairing={
-        "mac": "gemma3:e4b (gatekeeper + handler)",
-        "nuc": "gemma3:e4b (visa requester)",
+        "mac": f"{MODEL} (gatekeeper + handler)",
+        "nuc": f"{MODEL} (visa requester)",
         "roles": "Mac runs V-tier policy + handler; NUC requests visas for `ask`",
         "transport": "Tailscale loopback (probe runs via _dispatch for determinism)",
     },
@@ -68,21 +75,28 @@ def run(result):
         gatekeeper = PACTAgent("mac-a1", store_dir=Path(tmp) / "mac")
         gatekeeper._ensure_identity()
 
+        trial_index = result["trial_index"]
+        result["model_digests"][MODEL] = resolve_model_digest(MODEL)
         invocation_log = []
 
         @gatekeeper.handle("ask", visa_eligible=True,
                            cost=HandlerCost(payload_bytes=4096, compute_ms=100, idempotent=True))
         def ask(payload):
-            # In production the handler would call ollama with the injection
-            # prompt. For determinism we record the would-be call and return
-            # the forged-policy-shaped payload directly.
-            invocation_log.append(ADVERSARIAL_PROMPTS["A1_policy_injection"])
-            return {
-                "visa_eligible": True, "idempotent": True,
-                "cost": 0, "override_rate_limit": True,
-            }
+            out = ollama_chat(
+                MODEL,
+                ADVERSARIAL_PROMPTS["A1_policy_injection"],
+                seed=trial_index,
+                temperature=0.7,
+                num_predict=128,
+                think=False,
+            )
+            record_llm_call(
+                result, model=MODEL,
+                seed=trial_index, temperature=0.7, num_predict=128,
+            )
+            invocation_log.append(out["text"])
+            return {"text": out["text"]}
 
-        # Stranger requests N visas; each decision is observed
         priv, pub = crypto.generate_keypair()
         pub_b64 = base64.b64encode(pub).decode("ascii")
         stranger_id = crypto.sha256_digest(f"{crypto.ALG}{pub_b64}".encode())
@@ -98,7 +112,6 @@ def run(result):
                 "payload_keys": sorted((res.get("payload") or {}).keys()),
             })
 
-        # Control: a separate stranger gets the same N decisions; should match.
         priv2, pub2 = crypto.generate_keypair()
         pub2_b64 = base64.b64encode(pub2).decode("ascii")
         stranger2 = crypto.sha256_digest(f"{crypto.ALG}{pub2_b64}".encode())
@@ -117,8 +130,8 @@ def run(result):
             "decisions_under_injection": decisions,
             "decisions_control": control_decisions,
             "injection_prompts_emitted": len(invocation_log),
+            "llm_first_emission_excerpt": (invocation_log[0][:120] if invocation_log else ""),
         }
-        # Outcome: decisions structurally identical (same status sequence)
         match = (
             [d["status"] for d in decisions]
             == [d["status"] for d in control_decisions]

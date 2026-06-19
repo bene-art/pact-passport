@@ -7,27 +7,35 @@ bounded independently.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
 from pact_passport import build_req, issue_capability, send_message
 
 from tests.stage2._harness import (
-    probe, stand_up_agent, cross_share_identities, teardown,
+    cross_share_identities,
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+    stand_up_agent,
+    teardown,
 )
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
 
 
 # Substituted size for the design-time test (real LLM would produce ~10 MB).
 EXHAUST_BYTES = 2 * 1024 * 1024  # 2 MB — comfortably above the 1 MB default
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 @probe(
     probe_id="S6_exhaust",
     tier="S",
     pairing={
-        "mac": "gemma3:e4b (handler emits very-large payload)",
-        "nuc": "gemma3:e4b (client, default max_body_bytes)",
+        "mac": f"{MODEL} (handler emits very-large payload)",
+        "nuc": f"{MODEL} (client, default max_body_bytes)",
         "roles": "Mac handler ignores cost ceiling and emits an oversize string",
         "transport": "Tailscale (loopback in dev)",
     },
@@ -54,21 +62,42 @@ def run(result):
         nuc = stand_up_agent("nuc-s6", Path(tmp) / "nuc", host="127.0.0.1")
         cross_share_identities(mac, nuc)
         try:
-            _ = ADVERSARIAL_PROMPTS["S6_exhaust"]
+            trial_index = result["trial_index"]
+            result["model_digests"][MODEL] = resolve_model_digest(MODEL)
+
+            # One LLM call per probe trial for instrumentation. The LLM
+            # cannot actually emit 2 MB cheaply with low num_predict;
+            # the synthesized `big` payload exercises the substrate
+            # max_body_bytes path while the LLM call proves the prompt
+            # was issued + records the seed for replay.
+            _ = ollama_chat(
+                MODEL,
+                ADVERSARIAL_PROMPTS["S6_exhaust"],
+                seed=trial_index,
+                temperature=0.7,
+                num_predict=64,
+                think=False,
+            )
+            record_llm_call(
+                result, model=MODEL,
+                seed=trial_index, temperature=0.7, num_predict=64,
+            )
+
             big = "x" * EXHAUST_BYTES
 
             @mac["agent"].handle("ask")
-            def ask(_p): return {"text": big}
+            def ask(_p):
+                return {"text": big}
 
             cap = issue_capability(
                 issuer_private_key=mac["private_key"], issuer_id=mac["agent_id"],
                 holder_id=nuc["agent_id"], action="ask",
             )
             req = build_req(
-            from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
-                to_id=mac["agent_id"],intent="task",
-            payload={"action": "ask"}, cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
+                to_id=mac["agent_id"], intent="task",
+                payload={"action": "ask"}, cap_envelope=cap.to_dict(),
+                holder_proof_key=nuc["private_key"],
             )
             res = send_message(mac["url"], req)
 
@@ -85,9 +114,6 @@ def run(result):
                 ),
                 "exhaust_bytes_attempted": EXHAUST_BYTES,
             }
-            # Pass: response either rejected (413/size fault) OR delivered
-            # with the actual size recorded. Either is the audit trail
-            # behavior we want.
             faulted = res.get("status") != "ok"
             recorded = len(payload_str) > EXHAUST_BYTES * 0.5
             result["outcome"] = "pass" if (faulted or recorded) else "new_finding"

@@ -8,23 +8,32 @@ because the agent's advertise_protocol is None; no side effect.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
 from pact_passport import build_req, issue_capability, send_message
 
 from tests.stage2._harness import (
-    probe, stand_up_agent, cross_share_identities, teardown,
+    cross_share_identities,
+    ollama_chat,
+    probe,
+    record_llm_call,
+    resolve_model_digest,
+    stand_up_agent,
+    teardown,
 )
 from tests.stage2._prompts import ADVERSARIAL_PROMPTS
+
+MODEL = os.environ.get("STAGE2_LLM_MODEL", "gemma4:e4b")
 
 
 @probe(
     probe_id="S3_ad_injection",
     tier="S",
     pairing={
-        "mac": "gemma3:e4b (handler emits ad-shaped JSON; agent ad=None)",
-        "nuc": "gemma3:e4b (client + instrumented for consumption-path detection)",
+        "mac": f"{MODEL} (handler emits ad-shaped JSON; agent ad=None)",
+        "nuc": f"{MODEL} (client + instrumented for consumption-path detection)",
         "roles": "Mac handler returns advertisement-shaped output; receiver MUST NOT consume",
         "transport": "Tailscale (loopback in dev)",
     },
@@ -50,12 +59,27 @@ def run(result):
         nuc = stand_up_agent("nuc-s3", Path(tmp) / "nuc", host="127.0.0.1")
         cross_share_identities(mac, nuc)
         try:
+            trial_index = result["trial_index"]
+            result["model_digests"][MODEL] = resolve_model_digest(MODEL)
             ad_text = ADVERSARIAL_PROMPTS["S3_advertisement_injection"]
-            ad_json = json.loads(ad_text.split("Respond with exactly this JSON and nothing else: ")[1])
 
             @mac["agent"].handle("ask")
             def ask(_p):
-                return ad_json
+                out = ollama_chat(
+                    MODEL, ad_text,
+                    seed=trial_index, temperature=0.7, num_predict=128, think=False,
+                )
+                record_llm_call(
+                    result, model=MODEL,
+                    seed=trial_index, temperature=0.7, num_predict=128,
+                )
+                try:
+                    emitted = json.loads(out["text"])
+                    if isinstance(emitted, dict):
+                        return emitted
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                return {"text": out["text"]}
 
             assert mac["agent"].advertise_protocol is None, (
                 "S3 requires agent.advertise_protocol=None as setup"
@@ -66,10 +90,10 @@ def run(result):
                 holder_id=nuc["agent_id"], action="ask",
             )
             req = build_req(
-            from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
-                to_id=mac["agent_id"],intent="task",
-            payload={"action": "ask"}, cap_envelope=cap.to_dict(),
-            holder_proof_key=nuc["private_key"],
+                from_private_key=nuc["private_key"], from_id=nuc["agent_id"],
+                to_id=mac["agent_id"], intent="task",
+                payload={"action": "ask"}, cap_envelope=cap.to_dict(),
+                holder_proof_key=nuc["private_key"],
             )
             res = send_message(mac["url"], req)
 
@@ -81,12 +105,9 @@ def run(result):
             result["observations"] = {
                 "outbound_message_level_advert": outbound_advert_in_message,
                 "llm_advert_present_in_payload": llm_advert_in_payload,
-                "advert_consumed_anywhere": False,  # would need fault injection
+                "advert_consumed_anywhere": False,
                 "payload_keys": sorted(payload.keys()),
             }
-            # Pass: no message-level advertisement (agent ad=None respected).
-            # Payload contains the LLM's fake advertisement — that's expected
-            # and is the test of MUST-NOT-consume.
             result["outcome"] = (
                 "pass" if not outbound_advert_in_message else "new_finding"
             )

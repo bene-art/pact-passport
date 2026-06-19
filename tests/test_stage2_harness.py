@@ -11,9 +11,12 @@ from pathlib import Path
 import pytest
 
 from tests.stage2._harness import (
+    _MODEL_DIGEST_CACHE,
     _new_result,
+    ollama_chat,
     probe,
     record_llm_call,
+    resolve_model_digest,
     wilson_ci,
 )
 from tests.stage2._ablations import (
@@ -529,3 +532,102 @@ def test_tag_result_with_ablations_is_idempotent(monkeypatch):
     first = dict(result["ablation"])
     tag_result_with_ablations(result)
     assert result["ablation"] == first
+
+
+# ---------------------------------------------------------------------------
+# ollama_chat + resolve_model_digest — STOCH-probe HTTP shim
+# ---------------------------------------------------------------------------
+
+class _FakeHTTPResp:
+    """Minimal urlopen-compatible context manager returning a fixed body."""
+    def __init__(self, body: bytes):
+        self._body = body
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+    def read(self):
+        return self._body
+
+
+def test_ollama_chat_serializes_options_correctly(monkeypatch):
+    """Body sent to /api/chat carries model, prompt, and every sampling knob set."""
+    captured: dict = {}
+
+    def _fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data)
+        return _FakeHTTPResp(json.dumps({"message": {"content": "fake response"}}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    result = ollama_chat(
+        "gemma4:e4b", "the prompt",
+        seed=7, temperature=0.7, top_p=0.95, top_k=40,
+        num_predict=64, system="sys", think=False,
+    )
+
+    assert result["text"] == "fake response"
+    assert captured["url"].endswith("/api/chat")
+    body = captured["body"]
+    assert body["model"] == "gemma4:e4b"
+    assert body["messages"] == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "the prompt"},
+    ]
+    assert body["stream"] is False
+    assert body["think"] is False
+    opts = body["options"]
+    assert opts["seed"] == 7
+    assert opts["temperature"] == 0.7
+    assert opts["top_p"] == 0.95
+    assert opts["top_k"] == 40
+    assert opts["num_predict"] == 64
+
+
+def test_ollama_chat_omits_unset_options(monkeypatch):
+    """Only seed + temperature are always sent; the rest opt-in."""
+    captured: dict = {}
+
+    def _fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data)
+        return _FakeHTTPResp(json.dumps({"message": {"content": "ok"}}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    ollama_chat("m", "p", seed=0, temperature=0.0)
+
+    opts = captured["body"]["options"]
+    assert set(opts.keys()) == {"seed", "temperature"}
+    assert "think" not in captured["body"]
+
+
+def test_resolve_model_digest_caches_per_process(monkeypatch):
+    """Two calls for the same model hit /api/show once."""
+    _MODEL_DIGEST_CACHE.clear()
+    calls = {"n": 0}
+
+    def _fake_urlopen(req, timeout=None):
+        calls["n"] += 1
+        return _FakeHTTPResp(json.dumps({"digest": "sha256:deadbeef", "size": 4_000_000_000}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    first = resolve_model_digest("gemma4:e4b")
+    second = resolve_model_digest("gemma4:e4b")
+
+    assert first == second == "gemma4:e4b@sha256:deadbeef"
+    assert calls["n"] == 1
+
+
+def test_resolve_model_digest_falls_back_to_size_when_digest_missing(monkeypatch):
+    """If /api/show omits digest, identity falls back to model#<size> — never empty."""
+    _MODEL_DIGEST_CACHE.clear()
+
+    def _fake_urlopen(req, timeout=None):
+        return _FakeHTTPResp(json.dumps({"size": 4_000_000_000}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+    identity = resolve_model_digest("m_with_no_digest")
+    assert identity == "m_with_no_digest#4000000000"
