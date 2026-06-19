@@ -1,0 +1,219 @@
+/*
+ * PACT Core v0.8 — Tamarin model with domain-separated holder_proof
+ *
+ * Discharges Appendix A lemmas P-AUTH, P-MONO (unbounded K), P-BIND, and
+ * P-REPLAY (visa). Rotation continuity (KEY-CONT) is in pact_rotation.spthy.
+ *
+ * v0.7 → v0.8 DELTA:
+ *   - Use_Cap signs <'pact/hp/v1', req_id, cap_id, aid_i> instead of req_id alone.
+ *   - Honor_Cap verifies the same structured payload.
+ *   - Use_Visa signs <'pact/visa/v1', nonce> instead of nonce alone.
+ *   - Result: P_BIND attack trace from Run 2 Finding #1 is structurally
+ *     blocked. The visa signature cannot be replayed as holder_proof because
+ *     the signed terms are different shapes.
+ *
+ * Re-verification policy (PROOF_LOG.md Finding #1, lines 104-108):
+ *   "Expected outcome: P_BIND VERIFIED."
+ *
+ * v0.7 model preserved at pact_core.spthy (frozen at v0.7.1-pre-registration tag).
+ * This file is the v0.8 design. Tamarin run will tell us if P_BIND verifies.
+ *
+ * Conventions (unchanged from v0.7):
+ *   - Dolev–Yao attacker (Tamarin default).
+ *   - Sign / Verify and h() (SHA-256) as perfect primitives (builtins).
+ *   - Public constants 'string'; fresh ~x; public names $A.
+ *   - Action facts (between --[ ... ]->) label the trace; they do not
+ *     change protocol behavior.
+ */
+
+theory PactCoreV08
+begin
+
+builtins: hashing, signing
+
+functions:
+    alg/0
+
+// =============================================================================
+// §A.1  Identity inception (no rotation here)  — UNCHANGED from v0.7
+// =============================================================================
+
+rule Create_Agent:
+    let aid = h(<alg, pk(~sk)>) in
+    [ Fr(~sk) ]
+  --[ Created($A, aid) ]->
+    [ !Identity($A, aid, ~sk),
+      !HolderKey($A, ~sk),
+      Out(<aid, pk(~sk)>) ]
+
+// =============================================================================
+// §A.1  Message sign / accept  (P-AUTH)  — UNCHANGED from v0.7
+// =============================================================================
+
+rule Send_Signed:
+    let body = <~m, aid> in
+    [ !Identity($A, aid, ~sk), Fr(~m) ]
+  --[ Signed(~m, aid) ]->
+    [ Out(<aid, ~m, sign(body, ~sk)>) ]
+
+rule Accept_Signed:
+    [ In(<aid, m, s>),
+      !Identity($A, aid, ~sk) ]
+  --[ Accepted(m, aid),
+      Eq(verify(s, <m, aid>, pk(~sk)), true) ]->
+    [ ]
+
+restriction equal:
+    "All x y #i. Eq(x, y)@i ==> x = y"
+
+// =============================================================================
+// §A.2  Capabilities — issue, attenuate  — UNCHANGED from v0.7
+// =============================================================================
+
+rule Issue_Root_Cap:
+    let cap_body = <~cap_id, $I, $H, $action>
+        sig      = sign(cap_body, ~sk_i)
+    in
+    [ !Identity($I, aid_i, ~sk_i),
+      Fr(~cap_id) ]
+  --[ Issued(~cap_id, aid_i, $H, $action),
+      RootCap(~cap_id, $action) ]->
+    [ !Cap(~cap_id, aid_i, $H, $action, 'root', sig),
+      Out(<~cap_id, $I, $H, $action, sig>) ]
+
+rule Attenuate_Cap:
+    let parent_body = <cap_id_parent, aid_i, $H_parent, $action>
+        child_body  = <~cap_id_child, cap_id_parent, $H_child, $action>
+        link_sig    = sign(child_body, ~sk_parent)
+    in
+    [ !Cap(cap_id_parent, aid_i, $H_parent, $action, caveats_parent, parent_sig),
+      !HolderKey($H_parent, ~sk_parent),
+      Fr(~cap_id_child) ]
+  --[ Attenuated(cap_id_parent, ~cap_id_child, $action),
+      ActionPreservedAtStep(cap_id_parent, ~cap_id_child, $action) ]->
+    [ !Cap(~cap_id_child, aid_i, $H_child, $action,
+           <caveats_parent, 'attenuated'>, link_sig),
+      Out(<~cap_id_child, $H_child, $action, link_sig>) ]
+
+// =============================================================================
+// §A.2  Holder-binding (P-BIND)  — CHANGED FOR v0.8
+// =============================================================================
+//
+// v0.7 (Run 2 falsifying trace, Finding #1):
+//   Use_Cap:   sign(~req_id, ~sk_h)
+//   Honor_Cap: verify(hp, req_id, pk(~sk_h))
+//   ATTACK:    attacker takes sign(nonce, ~sk_h) from a Use_Visa output and
+//              submits as hp with req_id = nonce; Honor_Cap accepts because
+//              the bare-payload signature is shape-identical to a holder_proof.
+//
+// v0.8 (this file):
+//   Use_Cap:   sign(<'pact/hp/v1', req_id, cap_id, aid_i>, ~sk_h)
+//   Honor_Cap: verify(hp, <'pact/hp/v1', req_id, cap_id, aid_i>, pk(~sk_h))
+//   RESULT:    The signed term carries a domain tag ('pact/hp/v1') distinct
+//              from the Use_Visa signed term ('pact/visa/v1', see below).
+//              The signed term ALSO binds cap_id and aid_i — so even an
+//              attacker observing one holder_proof cannot replay it on a
+//              different cap_id or against a different issuer.
+
+rule Use_Cap:
+    let hp_payload = <'pact/hp/v1', ~req_id, cap_id, aid_i>
+    in
+    [ !Cap(cap_id, aid_i, $H, $action, caveats, sig),
+      !HolderKey($H, ~sk_h),
+      Fr(~req_id) ]
+  --[ Presented(~req_id, cap_id, $H),
+      HolderProofMade(cap_id, $H) ]->
+    [ Out(<~req_id, cap_id, sign(hp_payload, ~sk_h)>) ]
+
+rule Honor_Cap:
+    let hp_payload = <'pact/hp/v1', req_id, cap_id, aid_i>
+    in
+    [ In(<req_id, cap_id, hp>),
+      !Cap(cap_id, aid_i, $H, $action, caveats, sig),
+      !HolderKey($H, ~sk_h) ]
+  --[ Honored(req_id, cap_id, $H),
+      Eq(verify(hp, hp_payload, pk(~sk_h)), true) ]->
+    [ ]
+
+// =============================================================================
+// §A.3  Visa — session-scoped, one-shot  — CHANGED FOR v0.8 (signing only)
+// =============================================================================
+//
+// v0.7 (vulnerable):
+//   Use_Visa: sign(~nonce, ~sk_h)
+//
+// v0.8 (fixed):
+//   Use_Visa: sign(<'pact/visa/v1', ~nonce>, ~sk_h)
+//
+// The 'pact/visa/v1' tag is structurally distinct from 'pact/hp/v1'.
+// Even if an attacker observes both kinds of signatures from the same
+// holder, neither can be substituted for the other because the signed
+// terms have different shapes.
+
+rule Issue_Visa:
+    let visa_body = <~visa_id, $I, $H, 'visa', ~nonce>
+        sig       = sign(visa_body, ~sk_i)
+    in
+    [ !Identity($I, aid_i, ~sk_i),
+      Fr(~visa_id), Fr(~nonce) ]
+  --[ VisaIssued(~visa_id, ~nonce, aid_i, $H) ]->
+    [ Visa(~visa_id, aid_i, $H, ~nonce, sig),
+      Out(<~visa_id, $I, $H, ~nonce, sig>) ]
+
+rule Use_Visa:
+    let visa_payload = <'pact/visa/v1', ~nonce>
+    in
+    [ Visa(~visa_id, aid_i, $H, ~nonce, sig),
+      !HolderKey($H, ~sk_h) ]
+  --[ VisaUsed(~visa_id, ~nonce) ]->
+    [ Out(<'visa_use', ~visa_id, sign(visa_payload, ~sk_h)>) ]
+
+// =============================================================================
+// LEMMAS — UNCHANGED FROM v0.7
+// =============================================================================
+//
+// All lemma statements are identical to v0.7. The model rules changed; the
+// claims did not. This is the discipline: prove the SAME claim against the
+// NEW model. If P_BIND verifies on v0.8 and falsifies on v0.7, the fix is
+// load-bearing for the claim.
+
+lemma P_AUTH:
+    "All m aid #i.
+        Accepted(m, aid)@i
+        ==> Ex #j. Signed(m, aid)@j & j < i"
+
+lemma P_MONO [use_induction]:
+    "All cap_root cap_child action_root action_child #i #j.
+        RootCap(cap_root, action_root)@i
+        & ActionPreservedAtStep(cap_root, cap_child, action_child)@j
+        & i < j
+        ==> action_root = action_child"
+
+lemma P_MONO_transitive [use_induction]:
+    "All cap_a cap_b cap_c action_a action_b action_c #i #j #k.
+        RootCap(cap_a, action_a)@i
+        & ActionPreservedAtStep(cap_a, cap_b, action_b)@j
+        & ActionPreservedAtStep(cap_b, cap_c, action_c)@k
+        & i < j & j < k
+        ==> action_a = action_c"
+
+lemma P_BIND:
+    "All req_id cap_id H #i.
+        Honored(req_id, cap_id, H)@i
+        ==> Ex #j. HolderProofMade(cap_id, H)@j & j < i"
+
+lemma P_REPLAY_visa:
+    "All visa_id nonce #i #j.
+        VisaUsed(visa_id, nonce)@i
+        & VisaUsed(visa_id, nonce)@j
+        ==> #i = #j"
+
+lemma honest_accept_exists:
+    exists-trace
+    "Ex m aid #i. Accepted(m, aid)@i"
+
+lemma honest_honor_exists:
+    exists-trace
+    "Ex req_id cap_id H #i. Honored(req_id, cap_id, H)@i"
+
+end

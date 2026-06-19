@@ -1,0 +1,438 @@
+maude tool: 'maude'
+ checking version: 3.5.1. OK.
+ checking installation: OK.
+[Theory PactCore] Theory loaded
+[Theory PactCore] Theory translated
+[Theory PactCore] Derivation checks started
+[Theory PactCore] Derivation checks ended
+[Theory PactCore] Theory closed
+[Saturating Sources] Step 1 (Max 5)
+[Saturating Sources] Done
+theory PactCore
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: alg/0, fst/1, h/1, pair/2, pk/1, sign/2, snd/1, true/0,
+           verify/3
+equations:
+    fst(<x.1, x.2>) = x.1,
+    snd(<x.1, x.2>) = x.2,
+    verify(sign(x.1, x.2), x.1, pk(x.2)) = true
+
+rule (modulo E) Create_Agent:
+   [ Fr( ~sk ) ]
+  --[ Created( $A, h(<alg, pk(~sk)>) ) ]->
+   [
+   !Identity( $A, h(<alg, pk(~sk)>), ~sk ), !HolderKey( $A, ~sk ),
+   Out( <h(<alg, pk(~sk)>), pk(~sk)> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Send_Signed:
+   [ !Identity( $A, aid, ~sk ), Fr( ~m ) ]
+  --[ Signed( ~m, aid ) ]->
+   [ Out( <aid, ~m, sign(<~m, aid>, ~sk)> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Accept_Signed:
+   [ In( <aid, m, s> ), !Identity( $A, aid, ~sk ) ]
+  --[ Accepted( m, aid ), Eq( verify(s, <m, aid>, pk(~sk)), true ) ]->
+   [ ]
+
+  /*
+  rule (modulo AC) Accept_Signed:
+     [ In( <aid, m, s> ), !Identity( $A, aid, ~sk ) ]
+    --[ Accepted( m, aid ), Eq( z, true ) ]->
+     [ ]
+    variants (modulo AC)
+    1. ~sk   = ~sk.7
+       aid   = aid.7
+       m     = m.7
+       s     = s.7
+       z     = verify(s.7, <m.7, aid.7>, pk(~sk.7))
+    
+    2. ~sk   = ~x.7
+       aid   = x.8
+       m     = x.9
+       s     = sign(<x.9, x.8>, ~x.7)
+       z     = true
+  */
+
+restriction equal:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  */
+
+rule (modulo E) Issue_Root_Cap:
+   [ !Identity( $I, aid_i, ~sk_i ), Fr( ~cap_id ) ]
+  --[ Issued( ~cap_id, aid_i, $H, $action ), RootCap( ~cap_id, $action )
+  ]->
+   [
+   !Cap( ~cap_id, aid_i, $H, $action, 'root',
+         sign(<~cap_id, $I, $H, $action>, ~sk_i)
+   ),
+   Out( <~cap_id, $I, $H, $action, sign(<~cap_id, $I, $H, $action>, ~sk_i)>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Attenuate_Cap:
+   [
+   !Cap( cap_id_parent, aid_i, $H_parent, $action, caveats_parent,
+         parent_sig
+   ),
+   !HolderKey( $H_parent, ~sk_parent ), Fr( ~cap_id_child )
+   ]
+  --[
+  Attenuated( cap_id_parent, ~cap_id_child, $action ),
+  ActionPreservedAtStep( cap_id_parent, ~cap_id_child, $action )
+  ]->
+   [
+   !Cap( ~cap_id_child, aid_i, $H_child, $action,
+         <caveats_parent, 'attenuated'>,
+         sign(<~cap_id_child, cap_id_parent, $H_child, $action>, ~sk_parent)
+   ),
+   Out( <~cap_id_child, $H_child, $action, 
+         sign(<~cap_id_child, cap_id_parent, $H_child, $action>, ~sk_parent)>
+   )
+   ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Use_Cap:
+   [
+   !Cap( cap_id, aid_i, $H, $action, caveats, sig ),
+   !HolderKey( $H, ~sk_h ), Fr( ~req_id )
+   ]
+  --[ Presented( ~req_id, cap_id, $H ), HolderProofMade( cap_id, $H ) ]->
+   [ Out( <~req_id, cap_id, sign(~req_id, ~sk_h)> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Honor_Cap:
+   [
+   In( <req_id, cap_id, hp> ),
+   !Cap( cap_id, aid_i, $H, $action, caveats, sig ), !HolderKey( $H, ~sk_h )
+   ]
+  --[
+  Honored( req_id, cap_id, $H ), Eq( verify(hp, req_id, pk(~sk_h)), true )
+  ]->
+   [ ]
+
+  /*
+  rule (modulo AC) Honor_Cap:
+     [
+     In( <req_id, cap_id, hp> ),
+     !Cap( cap_id, aid_i, $H, $action, caveats, sig ), !HolderKey( $H, ~sk_h )
+     ]
+    --[ Honored( req_id, cap_id, $H ), Eq( z, true ) ]->
+     [ ]
+    variants (modulo AC)
+    1. ~sk_h = ~sk_h.11
+       hp    = hp.11
+       req_id
+             = req_id.11
+       z     = verify(hp.11, req_id.11, pk(~sk_h.11))
+    
+    2. ~sk_h = ~x.11
+       hp    = sign(x.15, ~x.11)
+       req_id
+             = x.15
+       z     = true
+  */
+
+rule (modulo E) Issue_Visa:
+   [ !Identity( $I, aid_i, ~sk_i ), Fr( ~visa_id ), Fr( ~nonce ) ]
+  --[ VisaIssued( ~visa_id, ~nonce, aid_i, $H ) ]->
+   [
+   Visa( ~visa_id, aid_i, $H, ~nonce,
+         sign(<~visa_id, $I, $H, 'visa', ~nonce>, ~sk_i)
+   ),
+   Out( <~visa_id, $I, $H, ~nonce, 
+         sign(<~visa_id, $I, $H, 'visa', ~nonce>, ~sk_i)>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Use_Visa:
+   [ Visa( ~visa_id, aid_i, $H, ~nonce, sig ), !HolderKey( $H, ~sk_h ) ]
+  --[ VisaUsed( ~visa_id, ~nonce ) ]->
+   [ Out( <'visa_use', ~visa_id, sign(~nonce, ~sk_h)> ) ]
+
+  /* has exactly the trivial AC variant */
+
+lemma P_AUTH:
+  all-traces
+  "∀ m aid #i.
+    (Accepted( m, aid ) @ #i) ⇒ (∃ #j. (Signed( m, aid ) @ #j) ∧ (#j < #i))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ m aid #i.
+  (Accepted( m, aid ) @ #i) ∧ ∀ #j. (Signed( m, aid ) @ #j) ⇒ ¬(#j < #i)"
+*/
+simplify
+solve( !Identity( $A, aid, ~sk ) ▶₁ #i )
+  case Create_Agent
+  solve( !KU( sign(<m, h(<alg, pk(~sk)>)>, ~sk) ) @ #vk.4 )
+    case Send_Signed
+    by contradiction /* from formulas */
+  next
+    case c_sign
+    by solve( !KU( ~sk ) @ #vk.6 )
+  qed
+qed
+
+lemma P_MONO [use_induction]:
+  all-traces
+  "∀ cap_root cap_child action_root action_child #i #j.
+    (((RootCap( cap_root, action_root ) @ #i) ∧
+      (ActionPreservedAtStep( cap_root, cap_child, action_child ) @ #j)) ∧
+     (#i < #j)) ⇒
+    (action_root = action_child)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ cap_root cap_child action_root action_child #i #j.
+  (RootCap( cap_root, action_root ) @ #i) ∧
+  (ActionPreservedAtStep( cap_root, cap_child, action_child ) @ #j)
+ ∧
+  (#i < #j) ∧ (¬(action_root = action_child))"
+*/
+induction
+  case empty_trace
+  by contradiction /* from formulas */
+next
+  case non_empty_trace
+  solve( (last(#j))  ∥ ($action = $action.1) )
+    case case_1
+    solve( !Identity( $I, aid_i, ~sk_i ) ▶₀ #i )
+      case Create_Agent
+      solve( !HolderKey( $H_parent, ~sk_parent ) ▶₁ #j )
+        case Create_Agent
+        solve( !Cap( ~cap_id, aid_i, $H_parent, $action.1, caveats_parent,
+                     parent_sig
+               ) ▶₀ #j )
+          case Issue_Root_Cap
+          by contradiction /* from formulas */
+        qed
+      qed
+    qed
+  next
+    case case_2
+    by contradiction /* from formulas */
+  qed
+qed
+
+lemma P_MONO_transitive [use_induction]:
+  all-traces
+  "∀ cap_a cap_b cap_c action_a action_b action_c #i #j #k.
+    (((((RootCap( cap_a, action_a ) @ #i) ∧
+        (ActionPreservedAtStep( cap_a, cap_b, action_b ) @ #j)) ∧
+       (ActionPreservedAtStep( cap_b, cap_c, action_c ) @ #k)) ∧
+      (#i < #j)) ∧
+     (#j < #k)) ⇒
+    (action_a = action_c)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ cap_a cap_b cap_c action_a action_b action_c #i #j #k.
+  (RootCap( cap_a, action_a ) @ #i) ∧
+  (ActionPreservedAtStep( cap_a, cap_b, action_b ) @ #j) ∧
+  (ActionPreservedAtStep( cap_b, cap_c, action_c ) @ #k)
+ ∧
+  (#i < #j) ∧ (#j < #k) ∧ (¬(action_a = action_c))"
+*/
+induction
+  case empty_trace
+  by contradiction /* from formulas */
+next
+  case non_empty_trace
+  solve( (last(#k))  ∥ ($action = $action.2) )
+    case case_1
+    solve( !Identity( $I, aid_i, ~sk_i ) ▶₀ #i )
+      case Create_Agent
+      solve( !HolderKey( $H_parent, ~sk_parent ) ▶₁ #j )
+        case Create_Agent
+        solve( !HolderKey( $H_parent.1, ~sk_parent.1 ) ▶₁ #k )
+          case Create_Agent
+          solve( !Cap( ~cap_id, aid_i, $H_parent, $action.1, caveats_parent,
+                       parent_sig
+                 ) ▶₀ #j )
+            case Issue_Root_Cap
+            solve( !Cap( ~cap_id_child, aid_i, $H_parent, $action.1, caveats_parent,
+                         parent_sig
+                   ) ▶₀ #k )
+              case Attenuate_Cap
+              by contradiction /* from formulas */
+            qed
+          qed
+        qed
+      qed
+    qed
+  next
+    case case_2
+    by contradiction /* from formulas */
+  qed
+qed
+
+lemma P_BIND:
+  all-traces
+  "∀ req_id cap_id H #i.
+    (Honored( req_id, cap_id, H ) @ #i) ⇒
+    (∃ #j. (HolderProofMade( cap_id, H ) @ #j) ∧ (#j < #i))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ req_id cap_id H #i.
+  (Honored( req_id, cap_id, H ) @ #i)
+ ∧
+  ∀ #j. (HolderProofMade( cap_id, H ) @ #j) ⇒ ¬(#j < #i)"
+*/
+simplify
+solve( !Cap( cap_id, aid_i, $H, $action, caveats, sig ) ▶₁ #i )
+  case Attenuate_Cap
+  solve( !HolderKey( $H, ~sk_h ) ▶₂ #i )
+    case Create_Agent
+    solve( !KU( sign(req_id, ~sk_h) ) @ #vk.4 )
+      case Issue_Root_Cap
+      solve( !Cap( cap_id_parent, aid_i, $H_parent, $action.1, caveats_parent,
+                   parent_sig
+             ) ▶₀ #vr )
+        case Issue_Root_Cap
+        solve( !KU( ~cap_id_child ) @ #vk.4 )
+          case Attenuate_Cap
+          solve( !KU( ~cap_id ) @ #vk.5 )
+            case Issue_Root_Cap
+            SOLVED // trace found
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma P_REPLAY_visa:
+  all-traces
+  "∀ visa_id nonce #i #j.
+    ((VisaUsed( visa_id, nonce ) @ #i) ∧ (VisaUsed( visa_id, nonce ) @ #j)) ⇒
+    (#i = #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ visa_id nonce #i #j.
+  (VisaUsed( visa_id, nonce ) @ #i) ∧ (VisaUsed( visa_id, nonce ) @ #j)
+ ∧
+  ¬(#i = #j)"
+*/
+simplify
+solve( (#i < #j)  ∥ (#j < #i) )
+  case case_1
+  solve( Visa( ~visa_id, aid_i, $H, ~nonce, sig ) ▶₀ #i )
+    case Issue_Visa
+    solve( !HolderKey( $H, ~sk_h ) ▶₁ #i )
+      case Create_Agent
+      solve( Visa( ~visa_id, aid_i, $H.1, ~nonce, sig ) ▶₀ #j )
+        case Issue_Visa
+        by contradiction /* cyclic */
+      qed
+    qed
+  qed
+next
+  case case_2
+  solve( Visa( ~visa_id, aid_i, $H, ~nonce, sig ) ▶₀ #i )
+    case Issue_Visa
+    solve( !HolderKey( $H, ~sk_h ) ▶₁ #i )
+      case Create_Agent
+      solve( Visa( ~visa_id, aid_i, $H.1, ~nonce, sig ) ▶₀ #j )
+        case Issue_Visa
+        by contradiction /* cyclic */
+      qed
+    qed
+  qed
+qed
+
+lemma honest_accept_exists:
+  exists-trace "∃ m aid #i. Accepted( m, aid ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ m aid #i. (Accepted( m, aid ) @ #i)"
+*/
+simplify
+solve( !Identity( $A, aid, ~sk ) ▶₁ #i )
+  case Create_Agent
+  solve( !KU( sign(<m, h(<alg, pk(~sk)>)>, ~sk) ) @ #vk.4 )
+    case Send_Signed
+    solve( !KU( ~m ) @ #vk.4 )
+      case Send_Signed
+      solve( !KU( h(<alg, pk(~sk)>) ) @ #vk.4 )
+        case Create_Agent
+        SOLVED // trace found
+      qed
+    qed
+  qed
+qed
+
+lemma honest_honor_exists:
+  exists-trace "∃ req_id cap_id H #i. Honored( req_id, cap_id, H ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ req_id cap_id H #i. (Honored( req_id, cap_id, H ) @ #i)"
+*/
+simplify
+solve( !Cap( cap_id, aid_i, $H, $action, caveats, sig ) ▶₁ #i )
+  case Attenuate_Cap
+  solve( !HolderKey( $H, ~sk_h ) ▶₂ #i )
+    case Create_Agent
+    solve( !KU( sign(req_id, ~sk_h) ) @ #vk.4 )
+      case Issue_Root_Cap
+      solve( !Cap( cap_id_parent, aid_i, $H_parent, $action.1, caveats_parent,
+                   parent_sig
+             ) ▶₀ #vr )
+        case Issue_Root_Cap
+        solve( !KU( ~cap_id_child ) @ #vk.4 )
+          case Attenuate_Cap
+          solve( !KU( ~cap_id ) @ #vk.5 )
+            case Issue_Root_Cap
+            SOLVED // trace found
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.12.0
+Maude version 3.5.1
+Git revision: UNKNOWN, branch: UNKNOWN
+Compiled at: 2026-03-08 09:49:47.765662 UTC
+*/
+
+end
+
+==============================================================================
+summary of summaries:
+
+analyzed: pact_core.spthy
+
+  processing time: 0.86s
+  
+  P_AUTH (all-traces): verified (5 steps)
+  P_MONO (all-traces): verified (8 steps)
+  P_MONO_transitive (all-traces): verified (10 steps)
+  P_BIND (all-traces): falsified - found trace (8 steps)
+  P_REPLAY_visa (all-traces): verified (10 steps)
+  honest_accept_exists (exists-trace): verified (6 steps)
+  honest_honor_exists (exists-trace): verified (8 steps)
+
+==============================================================================

@@ -1,0 +1,22 @@
+Biprocess 0 (that is, the initial process):
+{1}!
+{2}let r: bitstring = choice[reason_a,reason_b] in
+{3}in(c, req: bitstring);
+{4}out(c, denied)
+
+-- Observational equivalence in biprocess 1 (that is, biprocess 0, with let moved downwards):
+{1}!
+{3}in(c, req: bitstring);
+{4}out(c, denied)
+
+Translating the process into Horn clauses...
+Completing...
+RESULT Observational equivalence is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Observational equivalence is true.
+
+--------------------------------------------------------------
+

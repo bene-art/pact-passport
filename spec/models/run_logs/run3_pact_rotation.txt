@@ -1,0 +1,104 @@
+maude tool: 'maude'
+ checking version: 3.5.1. OK.
+ checking installation: OK.
+[Theory PactRotation] Theory loaded
+[Theory PactRotation] Theory translated
+[Theory PactRotation] Derivation checks started
+[Theory PactRotation] Derivation checks ended
+[Theory PactRotation] Theory closed
+[Saturating Sources] Step 1 (Max 5)
+[Saturating Sources] Done
+theory PactRotation
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: alg/0, fst/1, h/1, pair/2, pk/1, sign/2, snd/1, true/0,
+           verify/3
+equations:
+    fst(<x.1, x.2>) = x.1,
+    snd(<x.1, x.2>) = x.2,
+    verify(sign(x.1, x.2), x.1, pk(x.2)) = true
+
+rule (modulo E) Create_Agent:
+   [ Fr( ~sk ), Fr( ~sk_next ) ]
+  --[ Created( $A, h(<alg, pk(~sk)>) ), Committed( $A, h(pk(~sk_next)) )
+  ]->
+   [
+   AgentState( $A, h(<alg, pk(~sk)>), ~sk, ~sk_next ),
+   Out( <h(<alg, pk(~sk)>), pk(~sk), h(pk(~sk_next))> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Rotate_Honest:
+   [ AgentState( $A, aid, ~sk_curr, ~sk_next ), Fr( ~sk_next2 ) ]
+  --[
+  Rotated( $A, aid, ~sk_curr, ~sk_next ),
+  Committed( $A, h(pk(~sk_next2)) ), ContinuityHolds( $A, h(pk(~sk_next)) )
+  ]->
+   [
+   AgentState( $A, aid, ~sk_next, ~sk_next2 ),
+   Out( <aid, pk(~sk_next), h(pk(~sk_next2))> )
+   ]
+
+  // loop breaker: [0]
+  /* has exactly the trivial AC variant */
+
+lemma KEY_CONT:
+  all-traces
+  "∀ A aid sk_curr sk_next #i.
+    (Rotated( A, aid, sk_curr, sk_next ) @ #i) ⇒
+    (∃ #j. (Committed( A, h(pk(sk_next)) ) @ #j) ∧ (#j < #i))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A aid sk_curr sk_next #i.
+  (Rotated( A, aid, sk_curr, sk_next ) @ #i)
+ ∧
+  ∀ #j. (Committed( A, h(pk(sk_next)) ) @ #j) ⇒ ¬(#j < #i)"
+*/
+simplify
+solve( AgentState( $A, aid, ~sk_curr, ~sk_next ) ▶₀ #i )
+  case Create_Agent
+  by contradiction /* from formulas */
+next
+  case Rotate_Honest
+  by contradiction /* from formulas */
+qed
+
+lemma honest_rotation_exists:
+  exists-trace "∃ A aid sk_c sk_n #i. Rotated( A, aid, sk_c, sk_n ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ A aid sk_c sk_n #i. (Rotated( A, aid, sk_c, sk_n ) @ #i)"
+*/
+simplify
+solve( AgentState( $A, aid, ~sk_curr, ~sk_next ) ▶₀ #i )
+  case Create_Agent
+  SOLVED // trace found
+qed
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.12.0
+Maude version 3.5.1
+Git revision: UNKNOWN, branch: UNKNOWN
+Compiled at: 2026-03-08 09:49:47.765662 UTC
+*/
+
+end
+
+==============================================================================
+summary of summaries:
+
+analyzed: pact_rotation.spthy
+
+  processing time: 0.07s
+  
+  KEY_CONT (all-traces): verified (4 steps)
+  honest_rotation_exists (exists-trace): verified (3 steps)
+
+==============================================================================

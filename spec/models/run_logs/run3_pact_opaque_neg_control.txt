@@ -1,0 +1,72 @@
+Biprocess 0 (that is, the initial process):
+{1}!
+{2}let r: bitstring = choice[reason_a,reason_b] in
+{3}in(c, req: bitstring);
+{4}out(c, (denied,r))
+
+-- Observational equivalence in biprocess 1 (that is, biprocess 0, with let moved downwards):
+{1}!
+{3}in(c, req: bitstring);
+{2}let r: bitstring = choice[reason_a,reason_b] in
+{4}out(c, (denied,r))
+
+Translating the process into Horn clauses...
+Termination warning: v ≠ v_1 && attacker2(v_2,v) && attacker2(v_2,v_1) -> bad
+Selecting 0
+Termination warning: v ≠ v_1 && attacker2(v,v_2) && attacker2(v_1,v_2) -> bad
+Selecting 0
+Completing...
+Termination warning: v ≠ v_1 && attacker2(v_2,v) && attacker2(v_2,v_1) -> bad
+Selecting 0
+Termination warning: v ≠ v_1 && attacker2(v,v_2) && attacker2(v_1,v_2) -> bad
+Selecting 0
+goal reachable: bad
+
+Derivation:
+
+1. The attacker initially knows reason_b[] (resp. reason_b[]).
+attacker2(reason_b[],reason_b[]).
+
+2. The attacker has some term req_1 (resp. req_2).
+attacker2(req_1,req_2).
+
+3. The message req_1 (resp. req_2) that the attacker may have by 2 may be received at input {3}.
+So the message (denied[],reason_a[]) (resp. (denied[],reason_b[])) may be sent to the attacker at output {4}.
+attacker2((denied[],reason_a[]),(denied[],reason_b[])).
+
+4. By 3, the attacker may know (denied[],reason_a[]) (resp. (denied[],reason_b[])).
+Using the function 2-proj-2-tuple the attacker may obtain reason_a[] (resp. reason_b[]).
+attacker2(reason_a[],reason_b[]).
+
+5. By 4, the attacker may know reason_a[] (resp. reason_b[]).
+By 1, the attacker may know reason_b[] (resp. reason_b[]).
+We have reason_a[] ≠ reason_b[].
+The attacker tests equality between the two terms he knows, which may allow it to distinguish cases.
+bad.
+
+
+Unified req_1 with req_2
+A more detailed output of the traces is available with
+  set traceDisplay = long.
+
+in(c, a) at {3} in copy a_1
+
+out(c, (~M,~M_1)) with ~M = denied, ~M_1 = choice[reason_a,reason_b] at {4} in copy a_1
+
+The attacker tests whether
+~M_1 = choice[reason_a,reason_b]
+is equal to
+reason_b.
+The result in the left-hand side is different from the result in the right-hand side.
+A trace has been found.
+RESULT Observational equivalence cannot be proved.
+Looking for simplified processes ...
+No simplified process found.
+
+--------------------------------------------------------------
+Verification summary:
+
+Observational equivalence cannot be proved.
+
+--------------------------------------------------------------
+
