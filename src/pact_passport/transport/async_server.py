@@ -17,6 +17,7 @@ import logging
 import threading
 from collections.abc import Callable, Iterator
 
+from pact_passport.transport.server import _status_for_response
 from pact_passport._canonical import (
     encode_message, decode_message,
     JSON_CONTENT_TYPE, CBOR_CONTENT_TYPE,
@@ -151,7 +152,7 @@ def _make_asgi_app(
                     if hasattr(result, "__next__") and not isinstance(result, dict):
                         await send_stream(result)
                     else:
-                        await send_response(result)
+                        await send_response(result, status=_status_for_response(result))
                 except Exception as e:
                     logger.exception("Dispatch error")
                     await send_response({"error": str(e)}, 500)

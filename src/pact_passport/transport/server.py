@@ -18,12 +18,35 @@ from pact_passport._canonical import (
     encode_message, decode_message,
     JSON_CONTENT_TYPE, CBOR_CONTENT_TYPE,
 )
+from pact_passport.errors import http_status_for_fault, ALL_FAULT_CODES
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024  # 1 MB
 DEFAULT_READ_TIMEOUT = 30.0  # seconds
+
+
+def _status_for_response(response: dict) -> int:
+    """Derive HTTP status from a PACT response dict (spec §18.3).
+
+    Returns 200 for status='ok' responses. For status='error' responses,
+    looks up fault.code in the v1.4 ``pact_*`` taxonomy and returns the
+    mapped HTTP status (401/403/410). Legacy fault codes (non-``pact_*``)
+    keep the v0.7 behavior of HTTP 200 with the fault in the body — until
+    v0.8.2 completes the taxonomy roll-out.
+    """
+    if not isinstance(response, dict):
+        return 200
+    if response.get("status") != "error":
+        return 200
+    fault = response.get("fault")
+    if not isinstance(fault, dict):
+        return 200
+    code = fault.get("code")
+    if isinstance(code, str) and code in ALL_FAULT_CODES:
+        return http_status_for_fault(code)
+    return 200
 
 
 class PACTHandler(BaseHTTPRequestHandler):
@@ -144,7 +167,7 @@ class PACTHandler(BaseHTTPRequestHandler):
                 if hasattr(result, "__next__") and not isinstance(result, dict):
                     self._send_stream(result)
                 else:
-                    self._send_response(result)
+                    self._send_response(result, status=_status_for_response(result))
             except Exception as e:
                 logger.exception("Dispatch error")
                 self._send_response({"error": str(e)}, 500)
