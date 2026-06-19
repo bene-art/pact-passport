@@ -5,6 +5,67 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-06-18
+
+Substrate upgrade informed by external audit of [AIP v0.3.0](https://github.com/sunilp/aip) (`draft-prakash-aip-00`). Closes Bug 11 (P_BIND falsification) via domain-separated signing strings. Adds structured audit context, normative fault taxonomy, three-profile policy model, and bilateral-receipt floor. Spec v1.3.0-draft → v1.4.0-draft. Pre-registered at tag `v0.8.0-pre-registration` (commit `f29b56c`) — the frozen artifact the HotNets paper evidence cites.
+
+### Added
+
+- **Domain-separated signing payloads** (spec §18.1). `holder_proof` signs `{domain:"pact/hp/v1", req_id, cap_id, to_agent}` instead of just the request id. Visa-use signs `{domain:"pact/visa/v1", nonce}`. Closes P_BIND. `pact_passport.message` exports `HOLDER_PROOF_DOMAIN_V1`, `VISA_USE_DOMAIN_V1`, `holder_proof_payload()`, `visa_use_payload()`. v0.7 forms accepted with `DeprecationWarning` during the 90-day §18.7 migration window.
+- **`audit_context` field on PACTMessage** (spec §18.2). Required REQ field with `{purpose, audience_hint, requested_action, expires_at}`. `build_req` auto-synthesizes it from existing arguments; receivers in v0.8.0 expose `audit_req()` library function but do not yet enforce at dispatch (v0.8.1 plumbs enforcement).
+- **`pact_passport.audit` module** (NEW, 310 lines). `AuditResult` dataclass, `audit_req()`, `audit_receipt()`, `sign_initiator_ack()`, `make_bilateral_receipt()`, `scenario_predicts_match()`. Bilateral receipts per spec §18.6.
+- **`pact_passport.policy` module** (NEW, 360 lines). `PolicyProfile` enum (Simple / Standard / Advanced) per spec §18.4. Simple-profile byte-normative factories: `make_action_caveat`, `make_budget_caveat`, `make_depth_caveat`, `make_expiry_caveat`. Standard predicate registry; Advanced opt-in third-party caveats. `classify_caveat_profile()`, `evaluate_caveats()`. Macaroons-style (not Datalog).
+- **13-code wire-level fault taxonomy** (spec §18.3). `errors.py` adds `pact_audit_required`, `pact_audit_audience`, `pact_audit_expired`, `pact_audit_malformed`, `pact_cap_invalid`, `pact_cap_expired`, `pact_cap_chain`, `pact_cap_caveat_failed`, `pact_replay`, `pact_rate_limited`, `pact_bind_invalid`, `pact_unknown_message`, `pact_handler_error`. `FAULT_HTTP_STATUS` table + `http_status_for_fault()` helper map each to 400/401/403/410/429/500. Legacy Python exception classes coexist; transport plumbing is library-only in v0.8.0 (v0.8.1/v0.8.2 wire it).
+- **Spec §18 — v1.4 amendments** (9 subsections): domain separation, audit_context, fault taxonomy, three policy profiles, identity-document `public_keys` array with rotation overlap windows, bilateral-receipt floor, 90-day pre-v1.4 migration window, attack catalogue reference, threat-model boundary.
+- **Spec §19** — v1.3 → v1.4 changelog.
+- **Spec §20** — NEW Security Considerations section (8 subsections, IETF I-D convention). AIP v0.3.0 has no equivalent section.
+- **Spec §2** — RFC 2119 keyword block.
+- **`spec/attacks/attacks.json`** (NEW). 12 attack scenarios, each cross-referenced to formal lemma + Stage 2 probe + predicted fault code + HTTP status + v0.7/v0.8 behavior delta + AIP comparison. AIP ships 3 scenarios; PACT now ships 12.
+- **`spec/models/pact_core_v0_8.spthy`** (NEW). v0.8 Tamarin model. Run 3 (2026-06-18): 7/7 lemmas verified including P_BIND in 10 steps. With KEY_CONT (in `pact_rotation.spthy`) + P_OPAQUE (ProVerif): **9/9 formal lemmas pass on v0.8** (was 8/9 on v0.7). `PROOF_LOG.md` Run 3 entry preserved; Run 2 retained as historical.
+- **81 v1.4 conformance unit tests** under `tests/v1_4/` — holder_proof_v0_8 (14), audit_context (10), audit_module (7), error_codes (8), policy_profiles (28), attack_catalogue (16).
+
+### Changed
+
+- **Spec bumped: v1.3.0-draft → v1.4.0-draft** (932 → 1313 lines, +381 normative). v1.3 §16 amendments preserved.
+- **Receipts are normatively bilateral** (spec §18.6). v0.7 unilateral receipts still verify; v0.8 introduces the bilateral floor in the spec and the library helper. Wire round-trip via new `INITIATOR_ACK` message type ships in v0.8.2.
+- **Identity documents** carry a `public_keys` array with `valid_from` / `valid_until` overlap windows (spec §18.5). Self-certifying only — PACT explicitly refuses AIP's `aip:web:` DNS-anchored identity form (spec §20.3 + §3.5).
+
+### Fixed
+
+- **Bug 11 — `holder_proof` replay across different (cap, audience) pairs.** v0.7 signed only `req_id`, so a captured holder-proof could be replayed within a fresh REQ to a different audience or for a different cap. v0.8's domain-separated payload binds `cap_id` + `to_agent` into the signed bytes. Tamarin v0.7 falsified P_BIND in 8 steps; Tamarin v0.8 verifies P_BIND in 10 steps. Counterexample-search wall clock dropped 0.86s → 0.61s.
+
+### Deprecated
+
+- **v0.7 `holder_proof` payload** (raw `req_id` only). Accepted with `DeprecationWarning` per spec §18.7 90-day migration window; will be rejected in v0.9.
+- **Legacy fault names** in `errors.py` Python exception classes. New code should construct wire-level `pact_*` faults via the v1.4 taxonomy; legacy exception classes retained for one minor cycle.
+
+### Library-complete vs dispatch-integrated
+
+v0.8.0 ships the v1.4 library modules; dispatch-pipeline plumbing is split into follow-on releases per Option D pre-registration discipline:
+
+- **v0.8.0 (this release)** — library modules + spec + tests + formal-verification freeze.
+- **v0.8.1 (planned)** — plumb `audit_req` into REQ + V-tier dispatch, audit-side `pact_*` fault codes + HTTP mapping at transport, replace caveat loop with `policy.evaluate_caveats`, CLI v0.8 surface.
+- **v0.8.2 (planned)** — bilateral receipt round-trip via new `INITIATOR_ACK` message type, completion of `pact_*` fault taxonomy across non-audit dispatch sites.
+
+Each release pre-registers its own tag and re-runs the Phase A / B / B-2 confirmatory probes for clean attribution of any §12 cell movement.
+
+### Tests
+
+282 → 412 dynamic (+130: 81 v1.4 conformance + 49 incidental). Stage 2 harness probes count unchanged (10 STOCH wired to real Ollama via `ollama_chat` helper, was 10 stubs). Formal verification 8/9 → 9/9 lemmas. 1 by-design negative-control falsification (`pact_opaque_negative_control.pv`) confirms the equivalence query has teeth.
+
+### Pre-registration evidence stack
+
+Frozen at tag `v0.8.0-pre-registration` (commit `f29b56c`):
+
+- **D1** — threat coverage matrix at `~/Desktop/PACT_HotNets_Paper/D1_threat_coverage_matrix.md`.
+- **D2** — Tamarin + ProVerif 9/9 lemmas (Run 3 logs at `spec/models/run_logs/run3_*.txt`).
+- **D3** — calibrated harness with provenance stamps (M1 K-defect manifest).
+- **D3.5** — §12 ablation matrix (clean 5×5 diagonal Mac + NUC).
+- **D4** — Phase A confirmatory: Mac gemma4:e4b + NUC gemma3:12b. 347/348 cross-machine cell agreement (H5 invariance under heterogeneous LLM + OS).
+- **D4 supplement** — M1 K-sweep, sensitivity 0.6 at K=5.
+- **D5** — Phase B + B-2 exploratory: 3 adversaries (gemma4:e4b on Mac, gemma3:12b on NUC, Qwen3-235B-A22B via DeepInfra) × 5 Gap-B targets × 210+ iterations = **0 real findings** on v0.7, **0 real findings** on v0.8 re-run.
+- **D6** — PACT vs AIP + v0.7 vs v0.8 comparison at `~/Desktop/PACT_HotNets_Paper/D6_PACT_VS_AIP_AND_V07_VS_V08.md`.
+
 ## [0.7.1] — 2026-06-12
 
 README-only patch. v0.7.0's README didn't reflect v0.7.0's own rename — shipped to PyPI with stale `src/pact/` paths and a Status line still saying v0.6.1. No code change.
@@ -234,7 +295,11 @@ Initial public release.
 - Deterministic test vectors.
 - 111 unit tests.
 
-[0.5.5]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.5
+[0.8.0]: https://github.com/bene-art/pact-passport/releases/tag/v0.8.0-pre-registration
+[0.7.1]: https://github.com/bene-art/pact-passport/releases/tag/v0.7.1
+[0.7.0]: https://github.com/bene-art/pact-passport/releases/tag/v0.7.0
+[0.6.1]: https://github.com/bene-art/pact-passport/releases/tag/v0.6.1
+[0.6.0]: https://github.com/bene-art/pact-passport/releases/tag/v0.6.0
 [0.5.4]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.4
 [0.5.3]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.3
 [0.5.2]: https://github.com/bene-art/pact-passport/releases/tag/v0.5.2
