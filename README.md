@@ -16,7 +16,7 @@ Self-certifying identity, holder-bound capabilities, structured audit context, a
 > - **Bilateral receipts** are the normative floor (spec §18.6). Library helper ships now; wire round-trip via new `INITIATOR_ACK` message type ships in v0.8.2.
 > - **13-code wire-level fault taxonomy** (spec §18.3) with `FAULT_HTTP_STATUS` mapping to 400 / 401 / 403 / 410 / 429 / 500.
 > - **12-scenario attack catalogue** (`spec/attacks/attacks.json`) cross-referenced to formal lemmas + Stage 2 probes + fault codes. AIP v0.3.0 ships 3 scenarios; PACT now ships 12.
-> - **412 dynamic tests + 9/9 formal lemmas** (was 282 + 8/9). 81 v1.4 conformance tests under `tests/v1_4/`. Stage 2 adversarial harness wired to real Ollama (10 STOCH probes).
+> - **416 dynamic tests + 9/9 formal lemmas** (was 282 + 8/9). 81 v1.4 conformance tests under `tests/v1_4/`. Stage 2 adversarial harness wired to real Ollama (10 STOCH probes).
 > - **D6 evidence stack**: Tamarin Run 3 + Phase A confirmatory Mac & NUC + Phase B + Phase B-2 DeepInfra Qwen3-235B = 0 real findings across 210+ v0.7 + v0.8 adversary iterations. H5 invariance confirmed (Mac gemma4:e4b vs NUC gemma3:12b, 347/348 cross-machine cell agreement).
 > - Full case-study details in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) Part 2 (v0.5.5 → v0.6.1) and v0.8 release notes in [CHANGELOG.md](CHANGELOG.md).
 
@@ -207,7 +207,7 @@ pip install -e ".[dev,cbor,fast]"
 pytest -v
 ```
 
-412 dynamic tests + 9/9 formal lemmas (Tamarin + ProVerif) + 1 by-design negative-control falsification. 1 strict-xfail (B0_TLS baseline, deferred to Phase C). Coverage:
+416 dynamic tests + 9/9 formal lemmas (Tamarin + ProVerif) + 1 by-design negative-control falsification. 1 strict-xfail (B0_TLS baseline, deferred to Phase C). Coverage:
 
 - **Cryptography, identity, key rotation, doctor validation** — Ed25519 round-trip, key event log, KERI pre-rotation, store-permission checks.
 - **Capabilities** — issue, attenuate, verify, multi-hop chains at K ∈ {3, 5, 7, 10}, `cap_envelope`, append-only caveats, chain re-derivation (Macaroons-style).

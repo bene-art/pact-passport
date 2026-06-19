@@ -51,7 +51,7 @@ Each release pre-registers its own tag and re-runs the Phase A / B / B-2 confirm
 
 ### Tests
 
-282 → 412 dynamic (+130: 81 v1.4 conformance + 49 incidental). Stage 2 harness probes count unchanged (10 STOCH wired to real Ollama via `ollama_chat` helper, was 10 stubs). Formal verification 8/9 → 9/9 lemmas. 1 by-design negative-control falsification (`pact_opaque_negative_control.pv`) confirms the equivalence query has teeth.
+282 → 416 dynamic (+134: 81 v1.4 conformance + 53 incidental). Stage 2 harness probes count unchanged (10 STOCH wired to real Ollama via `ollama_chat` helper, was 10 stubs). Formal verification 8/9 → 9/9 lemmas. 1 by-design negative-control falsification (`pact_opaque_negative_control.pv`) confirms the equivalence query has teeth.
 
 ### Pre-registration evidence stack
 
