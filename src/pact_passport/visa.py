@@ -276,13 +276,46 @@ def issue_visa(
     return token
 
 
+def sign_visa_holder_proof(visa_nonce: str, holder_private_key: bytes) -> str:
+    """Sign the v1.4 visa-use holder_proof and return base64.
+
+    v1.4 / v0.8 (spec §18.1): the signed payload is the canonical-JSON of
+    ``{"domain": "pact/visa/v1", "nonce": <visa_nonce>}``. The ``pact/visa/v1``
+    domain tag is structurally distinct from ``pact/hp/v1`` used by
+    non-visa holder_proofs (see ``message.holder_proof_payload``). This is
+    what closes the P_BIND falsification trace from Tamarin Run 2 —
+    a visa-use signature cannot be replayed as a non-visa holder_proof
+    because the signed terms have different shapes.
+
+    Use this helper anywhere a visa-use holder_proof must be computed,
+    in preference to inline ``crypto.sign(visa_nonce.encode(), ...)``
+    (which is the v0.7 bare-payload form, vulnerable to P_BIND).
+    """
+    # Defer the import to avoid an import cycle with message.py.
+    from pact_passport.message import visa_use_payload
+    sig = crypto.sign(visa_use_payload(visa_nonce), holder_private_key)
+    return base64.b64encode(sig).decode("ascii")
+
+
 def verify_visa_holder_proof(
     holder_proof_b64: str,
     visa_nonce: str,
     holder_public_key: bytes,
+    allow_legacy_v07: bool = True,
 ) -> bool:
-    """For a visa cap, ``holder_proof`` signs the visa's server-issued
-    nonce — not ``msg.id``. Closes V5 (replay across request-pair).
+    """For a visa cap, ``holder_proof`` signs the visa's server-issued nonce.
+
+    v1.4 / v0.8 (spec §18.1): the signed payload is the canonical-JSON of
+    ``{"domain": "pact/visa/v1", "nonce": <visa_nonce>}``, computed via
+    ``visa_use_payload(nonce)`` and verified via Ed25519.
+
+    Args:
+        allow_legacy_v07: If True, also accept v0.7 bare-``visa_nonce``
+            signatures during the 90-day migration window (spec §18.7).
+            Emits a ``DeprecationWarning`` when a legacy signature is
+            accepted. After the migration window closes, this argument
+            SHOULD be set False so legacy signatures are rejected with
+            ``pact_holder_proof_invalid``.
     """
     if not holder_proof_b64 or not visa_nonce:
         return False
@@ -290,4 +323,26 @@ def verify_visa_holder_proof(
         sig_bytes = base64.b64decode(holder_proof_b64)
     except (binascii.Error, ValueError, TypeError):
         return False
-    return crypto.verify(visa_nonce.encode(), sig_bytes, holder_public_key)
+
+    # Defer the import to avoid an import cycle with message.py.
+    from pact_passport.message import visa_use_payload
+
+    # v0.8 path: structured payload (default).
+    if crypto.verify(visa_use_payload(visa_nonce), sig_bytes, holder_public_key):
+        return True
+
+    # Migration window: try v0.7 bare-bytes form (spec §18.7).
+    if allow_legacy_v07:
+        if crypto.verify(visa_nonce.encode(), sig_bytes, holder_public_key):
+            import warnings
+            warnings.warn(
+                "Accepting v0.7 bare-payload visa holder_proof. v1.4 receivers "
+                "MUST reject this format after the migration window closes "
+                "(spec §18.7). Update senders to v1.4 structured visa-use "
+                "signing (visa.sign_visa_holder_proof).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return True
+
+    return False

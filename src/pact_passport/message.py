@@ -1,6 +1,18 @@
 """PACT messages: REQ and RES.
 
 Only two message types. Everything else is a payload within REQ/RES.
+
+v1.4 / v0.8 changes (spec §18.1, §18.2):
+  - ``holder_proof`` signature MUST be over the structured canonical-JSON
+    payload ``{"domain":"pact/hp/v1", "req_id":..., "cap_id":..., "to_agent":...}``
+    instead of the bare ``msg.id`` bytes used in v0.7. This closes the P_BIND
+    falsification trace from Tamarin Run 2 (spec/models/PROOF_LOG.md Finding #1).
+    Verified by Tamarin Run 3 (spec/models/pact_core_v0_8.spthy).
+  - REQ messages MUST carry a structured ``audit_context`` field with required
+    keys (``purpose``, ``request_id``, ``audience_hint``, ``expires_at``).
+  - Migration window: pre-v1.4 ``holder_proof`` (bare ``msg.id`` bytes) is
+    accepted for 90 days from v1.4 release with a ``DeprecationWarning``.
+    See ``verify_holder_proof()``'s ``allow_legacy_v07`` parameter.
 """
 
 from __future__ import annotations
@@ -8,11 +20,69 @@ from __future__ import annotations
 import base64
 import binascii
 import uuid
+import warnings
 from datetime import datetime, timedelta, UTC
 from dataclasses import dataclass, field
 
 from pact_passport import crypto
 from pact_passport._canonical import canonical_json
+
+
+# ---------------------------------------------------------------------------
+# v1.4 / v0.8 domain separation tags (spec §18.1, §20.5)
+# ---------------------------------------------------------------------------
+
+HOLDER_PROOF_DOMAIN_V1 = "pact/hp/v1"
+"""Domain tag for non-visa holder_proof signatures (spec §18.1)."""
+
+VISA_USE_DOMAIN_V1 = "pact/visa/v1"
+"""Domain tag for visa-use holder_proof signatures (spec §18.1).
+
+Distinct from ``HOLDER_PROOF_DOMAIN_V1`` so the two signature classes
+are structurally non-substitutable. This is what closes the P_BIND
+falsification trace from Tamarin Run 2.
+"""
+
+
+def holder_proof_payload(req_id: str, cap_id: str | None, to_agent: str) -> bytes:
+    """Return the canonical-JSON bytes that v1.4 ``holder_proof`` MUST sign over.
+
+    Per spec §18.1, the signed payload is::
+
+        {"domain": "pact/hp/v1", "req_id": "<uuid>", "cap_id": "<uuid or ''>", "to_agent": "<aid>"}
+
+    canonical-JSON serialization sorts keys lexicographically. The same
+    function is used on both the sign side (build_req) and the verify side
+    (verify_holder_proof), so the byte sequences match exactly.
+
+    cap_id of ``None`` is normalized to the empty string ``""`` for
+    canonicalization stability (no spec rule against caps-less REQs at
+    the signing layer; the cap-presence check happens elsewhere).
+    """
+    return canonical_json({
+        "domain": HOLDER_PROOF_DOMAIN_V1,
+        "req_id": req_id,
+        "cap_id": cap_id if cap_id is not None else "",
+        "to_agent": to_agent,
+    })
+
+
+def visa_use_payload(nonce: str) -> bytes:
+    """Return the canonical-JSON bytes that v1.4 visa-use holder_proof MUST sign over.
+
+    Per spec §18.1, the signed payload is::
+
+        {"domain": "pact/visa/v1", "nonce": "<sha256:...>"}
+
+    The ``domain`` value is distinct from ``HOLDER_PROOF_DOMAIN_V1``,
+    making the two signature classes (visa-use vs. non-visa holder_proof)
+    structurally non-substitutable. This is the closure of the v0.7
+    P_BIND falsification trace.
+    """
+    return canonical_json({
+        "domain": VISA_USE_DOMAIN_V1,
+        "nonce": nonce,
+    })
 
 
 @dataclass
@@ -48,6 +118,14 @@ class PACTMessage:
     # lets the receiver verify the delegation chain and cache the cap.
     # Required for cross-machine delegation (A→B→C). Issue #10.
     cap_envelope: dict | None = None
+    # Structured audit context (v1.4 / spec §18.2). Required on REQ messages.
+    # Keys: ``purpose`` (string), ``request_id`` (uuid), ``audience_hint``
+    # (must equal ``to_agent``), ``expires_at`` (ISO 8601). The field is
+    # included in the canonical-JSON payload that the outer envelope
+    # signature covers, so tampering with audit_context is signature-
+    # detected. Migration window: v1.4 receivers SHOULD synthesize a
+    # placeholder for v0.7 REQs lacking the field (§18.7).
+    audit_context: dict | None = None
     alg: str = crypto.ALG
     signature: str = ""  # base64-encoded
 
@@ -80,6 +158,8 @@ class PACTMessage:
             d["identity_doc"] = self.identity_doc
         if self.cap_envelope is not None:
             d["cap_envelope"] = self.cap_envelope
+        if self.audit_context is not None:
+            d["audit_context"] = self.audit_context
         if self.stream is not None:
             d["stream"] = self.stream
         if self.chunk_seq is not None:
@@ -106,6 +186,7 @@ class PACTMessage:
             fault=d.get("fault"),
             identity_doc=d.get("identity_doc"),
             cap_envelope=d.get("cap_envelope"),
+            audit_context=d.get("audit_context"),
             stream=d.get("stream"),
             chunk_seq=d.get("chunk_seq"),
             chunk_final=d.get("chunk_final"),
@@ -133,8 +214,30 @@ def build_req(
     identity_doc: dict | None = None,
     cap_envelope: dict | None = None,
     stream: bool = False,
+    audit_context: dict | None = None,
+    audit_purpose: str = "task",
 ) -> PACTMessage:
-    """Build and sign a REQ message.
+    """Build and sign a v1.4 / v0.8 REQ message.
+
+    Args:
+        audit_context: Optional structured audit context per spec §18.2.
+            If None, this function synthesizes a v1.4-compliant audit_context
+            from the message's own fields (request_id = msg.id,
+            audience_hint = to_id, expires_at = deadline, purpose =
+            ``audit_purpose``).
+        audit_purpose: The ``purpose`` value to use when synthesizing
+            audit_context. Defaults to ``"task"``. Other recommended
+            values per spec §18.2: ``"delegation-step"``, ``"tool-call"``,
+            ``"audit-export"``, ``"revocation-broadcast"``,
+            ``"research-subtask"``, ``"system"``.
+
+    Holder proof (spec §18.1): when ``holder_proof_key`` is provided, this
+    function signs the canonical-JSON of ``{"domain":"pact/hp/v1", "req_id":
+    msg.id, "cap_id": cap_id or "", "to_agent": to_id}`` with the holder's
+    key. This is the v0.8 domain-separated signing string; it is structurally
+    distinct from the v0.7 bare-``msg.id`` form and from the visa-use
+    domain-separated form (``pact/visa/v1``). Tamarin Run 3 verifies
+    P_BIND under this structure.
 
     Set stream=True to request a streaming response (RES_CHUNK sequence
     instead of single RES). The handler on the receiver side must yield
@@ -160,6 +263,33 @@ def build_req(
             )
         cap_id = env_cap_id
 
+    # Synthesize audit_context if not provided (spec §18.2). This ensures
+    # all v1.4 REQs emitted by build_req() carry a non-empty audit_context.
+    # Callers who want a different purpose tag or non-default request_id
+    # MAY pass an explicit dict.
+    if audit_context is None:
+        audit_context = {
+            "purpose": audit_purpose,
+            "request_id": msg_id,
+            "audience_hint": to_id,
+            "expires_at": deadline,
+        }
+    else:
+        # Validate that the caller-supplied audit_context has all four
+        # required keys (spec §18.2). audience_hint MUST match to_id.
+        required = {"purpose", "request_id", "audience_hint", "expires_at"}
+        missing = required - set(audit_context)
+        if missing:
+            raise ValueError(
+                f"audit_context missing required keys: {sorted(missing)} "
+                f"(spec §18.2)"
+            )
+        if audit_context.get("audience_hint") != to_id:
+            raise ValueError(
+                f"audit_context.audience_hint ({audit_context.get('audience_hint')!r}) "
+                f"must equal to_id ({to_id!r}) per spec §18.2"
+            )
+
     msg = PACTMessage(
         id=msg_id,
         type="REQ",
@@ -173,15 +303,24 @@ def build_req(
         payload=payload or {},
         identity_doc=identity_doc,
         cap_envelope=cap_envelope,
+        audit_context=audit_context,
         stream=stream if stream else None,  # only include when True
     )
 
-    # Holder proof: sign the message ID with the holder's key
+    # Holder proof (spec §18.1): sign over the structured canonical-JSON
+    # payload, not the bare msg_id. The structured payload binds (req_id,
+    # cap_id, to_agent) so that a signature for one tuple cannot be replayed
+    # for another. The 'pact/hp/v1' domain tag distinguishes this from the
+    # visa-use signing string ('pact/visa/v1'). Tamarin Run 3 proves P_BIND
+    # under this structure.
     if holder_proof_key:
-        proof_sig = crypto.sign(msg_id.encode(), holder_proof_key)
+        proof_sig = crypto.sign(
+            holder_proof_payload(msg_id, cap_id, to_id),
+            holder_proof_key,
+        )
         msg.holder_proof = base64.b64encode(proof_sig).decode("ascii")
 
-    # Sign the whole message
+    # Sign the whole message envelope (includes audit_context now)
     sig = crypto.sign(canonical_json(msg.signable_dict()), from_private_key)
     msg.signature = base64.b64encode(sig).decode("ascii")
 
@@ -264,11 +403,31 @@ def verify_message(msg: PACTMessage, sender_public_key: bytes) -> bool:
     return crypto.verify(canonical_json(msg.signable_dict()), sig_bytes, sender_public_key)
 
 
-def verify_holder_proof(msg: PACTMessage, holder_public_key: bytes) -> bool:
+def verify_holder_proof(
+    msg: PACTMessage,
+    holder_public_key: bytes,
+    allow_legacy_v07: bool = True,
+) -> bool:
     """Verify the holder_proof in a REQ message.
 
+    v1.4 / v0.8 (spec §18.1): the holder_proof signature is over the
+    canonical-JSON payload produced by ``holder_proof_payload(msg.id,
+    msg.cap_id, msg.to_agent)``. The signed payload structure is::
+
+        {"domain": "pact/hp/v1", "req_id": <uuid>, "cap_id": <uuid or "">, "to_agent": <aid>}
+
+    Args:
+        msg: The PACT REQ message to verify.
+        holder_public_key: The holder's Ed25519 public key.
+        allow_legacy_v07: If True, also accept v0.7 bare-``msg.id``
+            signatures during the 90-day migration window (spec §18.7).
+            Emits a ``DeprecationWarning`` when a legacy signature is
+            accepted. After the migration window closes, this argument
+            SHOULD be set False so legacy signatures are rejected with
+            ``pact_holder_proof_invalid``.
+
     Returns False on malformed base64 (same fail-closed treatment as
-    verify_message — see v0.5.3 honesty patch).
+    ``verify_message`` — see v0.5.3 honesty patch).
     """
     if not msg.holder_proof:
         return False
@@ -276,7 +435,26 @@ def verify_holder_proof(msg: PACTMessage, holder_public_key: bytes) -> bool:
         proof_bytes = base64.b64decode(msg.holder_proof)
     except (binascii.Error, ValueError, TypeError):
         return False
-    return crypto.verify(msg.id.encode(), proof_bytes, holder_public_key)
+
+    # v0.8 path: structured payload (default).
+    v08_payload = holder_proof_payload(msg.id, msg.cap_id, msg.to_agent)
+    if crypto.verify(v08_payload, proof_bytes, holder_public_key):
+        return True
+
+    # Migration window: try v0.7 bare-bytes form (spec §18.7).
+    if allow_legacy_v07:
+        if crypto.verify(msg.id.encode(), proof_bytes, holder_public_key):
+            warnings.warn(
+                "Accepting v0.7 bare-payload holder_proof. v1.4 receivers "
+                "MUST reject this format after the migration window closes "
+                "(spec §18.7). Update senders to v1.4 structured holder_proof "
+                "(message.holder_proof_payload).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return True
+
+    return False
 
 
 def is_deadline_exceeded(msg: PACTMessage) -> bool:
