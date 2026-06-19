@@ -1,10 +1,10 @@
 # PACT v1 Specification
 
 **Protocol for Agent Capability and Trust**
-Version: 1.3.0-draft
-Date: 2026-06-08
+Version: 1.4.0-draft
+Date: 2026-06-18
 
-> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3 and **supersedes the §1–§11 sections it references**. Section 14 documents the v1.2 additions introduced in reference implementation v0.6 (V-tier visa machinery, per-link `parent_cap_id`, cancelled-receipt emission). Section 16 documents the v1.3 chain-walk additions introduced in reference implementation v0.7 (per-link `action_at_step` + `caveats_at_step`, closing Bug 9 rogue-delegator forgery). §14 and §16 **supersede/extend §12 where they overlap**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12, §14, *and §16* is. Changelogs in §13 (v1.0→v1.1), §15 (v1.1→v1.2), and §17 (v1.2→v1.3).
+> **Reading this spec.** Sections 1–11 describe the v1.0.0-draft baseline (PACT reference implementation v0.1.4). Section 12 documents the wire-affecting changes introduced in reference implementation versions v0.2.0 through v0.5.3 and **supersedes the §1–§11 sections it references**. Section 14 documents the v1.2 additions introduced in reference implementation v0.6 (V-tier visa machinery, per-link `parent_cap_id`, cancelled-receipt emission). Section 16 documents the v1.3 chain-walk additions introduced in reference implementation v0.7 (per-link `action_at_step` + `caveats_at_step`, closing Bug 9 rogue-delegator forgery). Section 18 documents the v1.4 additions introduced in reference implementation v0.8 (domain-separated holder_proof closing Bug 11 / P_BIND, structured audit_context, normative error taxonomy, three-tier policy profiles, key-rotation overlap windows). Section 20 is a new normative Security Considerations section informed by the Stage 2 pre-registered methodology (D4, D5) and machine-checked formal verification (D2 / Tamarin Run 3). §14, §16, and §18 **supersede/extend §12 where they overlap**. An implementation matching only §1–§11 is **not** compatible with current PACT peers; matching §1–§11 *as amended by* §12, §14, §16, *and §18* is. Changelogs in §13 (v1.0→v1.1), §15 (v1.1→v1.2), §17 (v1.2→v1.3), and §19 (v1.3→v1.4).
 
 ---
 
@@ -17,6 +17,8 @@ This document is sufficient for an independent implementation. Test vectors are 
 ---
 
 ## 2. Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119] (added in v1.4).
 
 - All byte strings are encoded as **base64** (standard, with padding) in JSON.
 - All hashes use **SHA-256**, represented as `sha256:<64 hex chars>`.
@@ -930,3 +932,382 @@ Line-item summary for implementers tracking the diff. Each row points to the §1
 **Versioning policy continued.** v1.2 → v1.3 indicates additive tightening (the per-link content binding + chain-walk re-derivation), a known-limitation closure (Bug 9), and one additive V-tier extension (the passive protocol-advertisement field, §16.5). v1.3 verifiers accept caps in v1.1, v1.2, or v1.3 chain-link format with a deprecation cascade; v1.4 drops the v1.1 + v1.2 fallbacks. The substrate now has zero known unfixed correctness gaps documented in the case study (Bugs 1–9 all closed at the reference-implementation level). The §16.5 MUST-NOT on advertisement consumption MUST be preserved in all future versions; relaxing it would constitute a security-model break. **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) is the gate for dropping `-draft`.
 
 **Test vectors.** A v1.3 vector update covering chain-walk re-derivation is pending; the reference implementation's full test suite exercises the v1.3 paths in the meantime.
+
+---
+
+## 18. v1.4 amendments (extend §16; closes Bug 11 — P_BIND falsification)
+
+Section 18 is normative for v1.4 and is tracked by reference implementation **v0.8**. Where §18.x conflicts with §14.x or §16.x, §18.x is authoritative. §18 closes **Bug 11** (the absence of domain separation in `holder_proof` and `visa_use` signatures), surfaced as the P_BIND falsification trace in Tamarin Run 2 (spec/models/PROOF_LOG.md, Finding #1). The closure was machine-checked in Tamarin Run 3 (spec/models/pact_core_v0_8.spthy, see PROOF_LOG.md §"Run 3").
+
+§18 also incorporates several patterns informed by an audit of Agent Identity Protocol (AIP, github.com/sunilp/aip) v0.3.0, reframed to serve PACT's peer-to-peer / bilateral-receipt / Macaroons-style-attenuation ethos. Where AIP and PACT both address a concern, this document cites the parallel; the substantive design choices remain PACT's.
+
+### 18.1 Domain-separated `holder_proof` (closes Bug 11 / P_BIND)
+
+Each `holder_proof` signature minted under v1.4 MUST be computed over a structured payload that distinguishes it from any other signature class the holder produces. The signed payload is the canonical-JSON encoding of:
+
+```json
+{
+  "domain":   "pact/hp/v1",
+  "req_id":   "<REQ.id, UUIDv4>",
+  "cap_id":   "<REQ.cap_envelope.cap_id, UUIDv4 — or '' if no cap>",
+  "to_agent": "<REQ.to_agent, sha256:...>"
+}
+```
+
+The `domain` field MUST be the literal string `"pact/hp/v1"`. The field order in the source object is irrelevant; canonical JSON (§3) sorts keys lexicographically before signing.
+
+The `holder_proof` wire field on REQ messages (§6.2 / §12.2) is the base64-encoded Ed25519 signature of this canonical-JSON payload computed with the holder's private key.
+
+Receivers MUST reconstruct the expected payload from the REQ they received (REQ.id, REQ.cap_envelope.cap_id, REQ.to_agent) and verify the `holder_proof` signature against the canonical-JSON of that reconstructed payload using the holder's public key (resolved from the identity document referenced by REQ.cap_envelope.holder).
+
+**Wire-affecting:** Yes. v0.7 implementations sign and verify `holder_proof` over the bare `REQ.id` bytes; v1.4 verifiers MUST reject such v0.7-format signatures with fault `pact_holder_proof_invalid` (§18.3) after the v1.4 migration window closes.
+
+**Visa-use signing.** v1.4 also tightens the visa-use signature. The `visa_use` signature MUST be computed over the canonical-JSON encoding of:
+
+```json
+{
+  "domain": "pact/visa/v1",
+  "nonce":  "<visa.nonce, sha256:...>"
+}
+```
+
+The `domain` field MUST be the literal string `"pact/visa/v1"` — distinct from `"pact/hp/v1"` above. This distinction is load-bearing for P_BIND: in v0.7 the visa-use signature is over a bare nonce, which a Tamarin Run 2 trace shows can be replayed as a holder_proof for any req_id matching the nonce. With distinct domain tags, the two signatures are structurally non-substitutable.
+
+**Formal verification.** Tamarin proves P_BIND under the v1.4 signing structure. See `spec/models/pact_core_v0_8.spthy` and `spec/models/PROOF_LOG.md` §"Run 3" for the model, the proof, and the closure trace.
+
+**AIP parallel.** AIP v0.3.0 calls a related construct "invocation-binding" but ties the signature only to the bare invocation context. PACT's binding goes further by including `cap_id` and `to_agent` so that even within the holder_proof domain, signatures cannot cross-use between different caps or against different receivers.
+
+### 18.2 Structured `audit_context` field on REQ (required)
+
+Every REQ message under v1.4 MUST carry a top-level `audit_context` field whose value is a JSON object with the following required keys:
+
+| Key | Type | Constraint |
+|---|---|---|
+| `purpose` | string | Non-empty. SHOULD be one of: `"task"`, `"delegation-step"`, `"tool-call"`, `"audit-export"`, `"revocation-broadcast"`, `"research-subtask"`, `"system"`. Implementations MAY accept others. |
+| `request_id` | string | UUIDv4. SHOULD equal REQ.id; MAY differ for sub-requests. |
+| `audience_hint` | string | The receiver's `agent_id` (`sha256:...`). MUST equal REQ.to_agent. |
+| `expires_at` | string | ISO 8601 timestamp. MUST be in the future at sign-time. |
+
+The `audit_context` object MUST be included in the canonical-JSON payload that the REQ's outer envelope signature covers (§6.2 signature scope).
+
+Receivers MUST reject REQs missing `audit_context` or with any required key missing, empty, or malformed with fault `pact_token_malformed` (§18.3).
+
+Receivers MUST reject REQs where `audit_context.audience_hint != REQ.to_agent` with fault `pact_audience_mismatch` (§18.3) (added 2026-06-18 — `pact_audience_mismatch` is new in v1.4).
+
+**Wire-affecting:** Yes. New required field on REQ.
+
+**Rationale.** v0.7 receipts contain the bilateral REQ/RES pair, but the *purpose* of the exchange is implicit in the application-layer payload. Making purpose explicit at the protocol layer enables protocol-layer audit ("how many revocation-broadcast REQs did this agent send in window W?") without parsing application payloads.
+
+**AIP parallel.** AIP requires a per-delegation `context` field but as free-form text. PACT v1.4 makes it structured (enabling machine-auditable purpose) and binds the audience explicitly (closing a class of audience-confusion attacks AIP treats with a separate error type).
+
+### 18.3 Normative error taxonomy
+
+PACT v1.4 defines the following normative fault codes. Implementations MUST emit one of these codes (in the `fault.code` field of RES messages, §6.3) when rejecting a REQ. The HTTP status mapping applies when PACT is carried over HTTP (§8.1).
+
+**Authentication-class faults (HTTP 401):**
+
+| Code | Meaning |
+|---|---|
+| `pact_token_missing` | REQ envelope lacks required signed fields (e.g., no signature, no holder_proof when one is required). |
+| `pact_token_malformed` | REQ structure violates spec (missing field, wrong type, malformed canonical JSON, missing `audit_context`). |
+| `pact_signature_invalid` | Outer envelope or cap-chain signature does not verify against the claimed signer's public key. |
+| `pact_holder_proof_invalid` | `holder_proof` signature does not verify against the reconstructed canonical payload (§18.1) OR uses the v0.7 bare-payload format after the v1.4 migration window closes. |
+| `pact_identity_unresolvable` | Receiver cannot resolve the signer's identity document (no inline identity_doc, no advertise_protocol, no out-of-band registration). |
+| `pact_token_expired` | `audit_context.expires_at` is in the past, OR cap-chain element's expiry has passed. |
+| `pact_key_revoked` | Signer's key has been revoked per a revocation record observed by the receiver. |
+
+**Authorization-class faults (HTTP 403):**
+
+| Code | Meaning |
+|---|---|
+| `pact_scope_insufficient` | Cap's `action` does not cover the requested operation, OR cap's caveats forbid this operation. |
+| `pact_budget_exceeded` | Cumulative cost-of-operation exceeds the budget caveat on the cap. |
+| `pact_depth_exceeded` | Delegation chain exceeds the `max_depth` caveat. |
+| `pact_audience_mismatch` | `audit_context.audience_hint != REQ.to_agent`, OR cap's `holder != REQ.from_agent`. |
+| `pact_receipt_not_bilateral` | When operating in bilateral mode (§18.6), a returned receipt lacks the counterparty's required signature. |
+
+**Operational signals (HTTP 410):**
+
+| Code | Meaning |
+|---|---|
+| `pact_revocation_observed` | The signer's identity, key, or cap has a revocation record but the REQ is otherwise valid — distinguishes "your token is fine but the key was revoked at T" from "your specific token is bad". |
+
+Implementations MAY define additional codes for application-layer concerns; such codes MUST NOT use the `pact_` prefix.
+
+**Wire-affecting:** Yes. v0.7 implementations may emit different fault codes; v1.4 receivers normalize to this taxonomy.
+
+**AIP parallel.** AIP v0.3.0 defines 9 codes for MCP/A2A bindings (`aip_token_missing` through `aip_key_revoked`). PACT's taxonomy is structurally similar — Ed25519-based protocols share rejection classes — but adds three PACT-specific codes (`pact_holder_proof_invalid`, `pact_receipt_not_bilateral`, `pact_revocation_observed`) reflecting PACT's bilateral-receipt and real-revocation commitments.
+
+### 18.4 Policy profiles (Simple, Standard, Advanced)
+
+PACT v1.4 defines three policy profiles for the caveat language. Implementations MAY support any subset; identity documents MAY advertise a `minimum_policy_profile` declaring which profiles a receiver requires. Profiles graduate complexity additively — a Standard implementation also implements Simple, an Advanced implementation also implements both.
+
+#### 18.4.1 Simple profile
+
+The Simple profile uses four templated caveat types. Implementations MUST generate the exact byte patterns shown below when serializing Simple caveats; this normativity enables cross-implementation conformance testing.
+
+| Template | Canonical-JSON form |
+|---|---|
+| Action allowlist | `{"restrict":"action","value":["<a1>","<a2>",...]}` |
+| Budget ceiling (USD-cents) | `{"restrict":"budget_cents","value":<int>}` |
+| Depth ceiling | `{"restrict":"depth","value":<int>}` |
+| Expiry (absolute time) | `{"restrict":"expires_at","value":"<ISO 8601>"}` |
+
+Caveat satisfaction:
+- Action: `intent.action` MUST be in the `value` array.
+- Budget: cumulative cost-of-operation (impl-defined; minimal interpretation = number of REQs against the cap) MUST be `<= value`.
+- Depth: delegation chain length to the leaf token MUST be `<= value`.
+- Expiry: current time MUST be `< value`.
+
+Each caveat type SHOULD appear at most once per cap; duplicates are union-intersected (the most restrictive wins).
+
+#### 18.4.2 Standard profile
+
+The Standard profile adds custom predicates beyond the four templates. A custom predicate is a JSON object:
+
+```json
+{
+  "restrict":  "<name>",
+  "evaluator": "<URI scheme reserved for future versions; SHOULD be absent in v1.4>",
+  "value":     "<arbitrary JSON>"
+}
+```
+
+Receivers under the Standard profile MUST evaluate custom predicates against the impl-registered predicate handler. If no handler is registered for the named predicate, the receiver MUST reject the REQ with `pact_scope_insufficient` (a missing predicate handler is fail-closed by definition).
+
+Standard predicates MUST terminate in `<=100` evaluation steps for any single REQ. Implementations MUST enforce this limit and reject with `pact_scope_insufficient` if exceeded.
+
+#### 18.4.3 Advanced profile
+
+The Advanced profile permits third-party caveats. A third-party caveat is a Standard predicate plus:
+
+```json
+{
+  "restrict": "<name>",
+  "third_party": true,
+  "verifier_endpoint": "<URI the verifier must consult>",
+  "verifier_pubkey":  "<base64 Ed25519 pubkey of the verifier>"
+}
+```
+
+Receivers under the Advanced profile MUST contact `verifier_endpoint` (signed by `verifier_pubkey`) before honoring the cap. The verifier endpoint returns a signed assertion that the predicate holds.
+
+Implementations MAY refuse Advanced. If an identity document advertises `minimum_policy_profile: "advanced"` and the receiver does not implement Advanced, the receiver SHOULD return `pact_scope_insufficient` rather than attempting evaluation.
+
+**Wire-affecting:** Additive. Simple is the v0.7 baseline (templated caveats already exist informally). Standard and Advanced are new in v1.4.
+
+**AIP parallel.** AIP's three policy profiles (`Simple` / `Standard` / `Advanced` per `aip-tokens.md` §7) inspire PACT's tiering structure. PACT's profiles use Macaroons-style caveats with normative byte patterns; AIP's use Biscuit/Datalog. The byte-level normativity in PACT's Simple profile mirrors AIP's "implementations MUST generate exactly these patterns" requirement and enables the same cross-implementation determinism, but without taking a Datalog dependency.
+
+### 18.5 Key rotation with overlap windows
+
+The identity document (§4.3) is extended in v1.4 to support multiple concurrent public keys with explicit validity windows:
+
+```json
+{
+  "agent_id": "sha256:...",
+  "public_keys": [
+    {
+      "id":          "k0",
+      "type":        "Ed25519",
+      "public_key":  "base64...",
+      "valid_from":  "ISO 8601",
+      "valid_until": "ISO 8601 — or null for indefinite"
+    },
+    {
+      "id":          "k1",
+      "type":        "Ed25519",
+      "public_key":  "base64...",
+      "valid_from":  "ISO 8601 (overlaps k0's valid_until window)",
+      "valid_until": "ISO 8601"
+    }
+  ],
+  ...
+}
+```
+
+Each signature received MUST be verified against a key whose validity window includes the signature's timestamp. (For REQs, the relevant timestamp is `audit_context.expires_at - 1` — i.e., the most-permissive interpretation that the signer was authoritative at request creation time.)
+
+A key MAY be revoked mid-window via the v0.8 REVOKE beacon (separate mechanism, not part of §18). Revocation supersedes the window's `valid_until`.
+
+The Key Event Log (§4.2) is unchanged in v1.4; rotation events now MAY produce overlapping keys instead of strict succession. The first key (`id: "k0"`) is still the inception-event key whose hash defines `agent_id`.
+
+**Wire-affecting:** Additive. v0.7 identity documents have a single key; v1.4 documents MAY have multiple. v1.4 receivers MUST handle both shapes (the `public_keys` array is the new normative form; the legacy single-key form (§4.3) is accepted via the v1.4 migration window in §18.7).
+
+**AIP parallel.** AIP's `aip-core.md` §3.2 + §6.1 specify dual-key overlap windows for `aip:web:` identities. PACT adopts the same dual-window pattern but only for self-certifying (`pact:key:` analogue) identities; PACT explicitly refuses the DNS-anchored `aip:web:` flow on self-sovereignty grounds.
+
+### 18.6 Bilateral receipts (clarification)
+
+§7 already describes that receipts are signed by both the request initiator and the receiver. v1.4 makes this explicitly normative:
+
+A receipt under v1.4 is *bilateral* iff it carries BOTH:
+1. The signature of the receiver over the canonical-JSON RES payload (`receipt.receiver_signature`)
+2. The acknowledgment signature of the initiator over the canonical-JSON receipt (`receipt.initiator_ack_signature`)
+
+A receipt missing either signature is *non-bilateral*. Non-bilateral receipts MAY exist in implementation but MUST NOT be presented as audit evidence between distrustful parties.
+
+A receiver in *bilateral mode* (advertised via identity document `protocols.pact.bilateral_required: true`) MUST refuse to honor a REQ unless the RES it sends back will also carry an initiator-ack signature within the audit window. If the initiator fails to ack, the receiver MUST emit a *cancelled receipt* (§14.9) and MAY return `pact_receipt_not_bilateral` to subsequent REQs from the same initiator.
+
+**Wire-affecting:** Mostly clarification. The signature structure is already established in §7 and §14.7; v1.4 names the bilateral-vs-non-bilateral distinction and gives receivers the `pact_receipt_not_bilateral` rejection path.
+
+**AIP parallel.** AIP's `aip-provenance.md` §3.2 defines three trust levels for completion blocks: `self_reported` (Level 1), `counter_signed` (Level 2), `peer_verified` / `human_verified` (Level 3). PACT's bilateral receipt is structurally AIP Level 2 by default (delegator-counterparty signs), making PACT's *floor* equivalent to AIP's opt-in mid-tier. PACT explicitly refuses Level 1 self-reported semantics; the receipt is bilateral or it is not a PACT receipt.
+
+### 18.7 Pre-v1.4 migration window
+
+A v1.4 verifier:
+
+- MUST accept v1.3 chain-link format (§16) — that gate is unchanged.
+- SHOULD accept v0.7 bare-payload `holder_proof` for an explicitly time-bounded migration window (default: 90 days from v1.4 release tag), emitting `DeprecationWarning` on accept. After the window closes, v0.7-format `holder_proof` MUST be rejected with `pact_holder_proof_invalid`.
+- SHOULD accept REQs lacking `audit_context` for the same migration window (synthesize a placeholder `audit_context` with `purpose: "task"`, `request_id: REQ.id`, `audience_hint: REQ.to_agent`, `expires_at: REQ.deadline`), emitting `DeprecationWarning`. After the window closes, missing `audit_context` MUST be rejected with `pact_token_malformed`.
+- MAY accept legacy single-key identity documents (§4.3) indefinitely — single-key is a special case of the new array form (`public_keys: [{id: "k0", ...}]`).
+
+A v1.4 sender MUST emit the v1.4 forms (domain-separated `holder_proof`, present `audit_context`, public-keys-array identity doc).
+
+**Wire-affecting:** Migration semantics.
+
+### 18.8 Attack scenario catalogue
+
+PACT v1.4 ships a machine-readable attack scenario catalogue at `spec/attacks/attacks.json`. Each scenario records:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `id` | string | Stable identifier (e.g., `holder-proof-replay`) |
+| `title` | string | Human-readable title |
+| `lemma_ref` | string | Reference to a formal lemma (e.g., `P-BIND`) |
+| `test_ref` | string | Reference to a Stage 2 probe (e.g., `ATTR_BIND`) or formal model file |
+| `predicted_error` | string | Expected `fault.code` value (§18.3) |
+| `predicted_status` | int | Expected HTTP status (when over HTTP) |
+| `notes` | string | Migration notes (e.g., "v0.7 vulnerable, v0.8 fixed") |
+
+Conformant implementations SHOULD be able to demonstrate that every catalogued scenario produces the predicted error code. The catalogue is versioned with the spec; v1.5 may add or refine scenarios.
+
+The v1.4 catalogue includes 12 scenarios spanning P-AUTH, P-BIND, P-MONO, P-REPLAY, P-AUDIT, and P-OPAQUE coverage. See `spec/attacks/attacks.json` for the canonical list.
+
+**Wire-affecting:** No.
+
+**AIP parallel.** AIP v0.3.0 ships 3 catalogued scenarios at `site/paper/data/attacks.json` (`scope-widening`, `replay-after-expiry`, `depth-bypass`). PACT's catalogue supersets AIP's three (with PACT-specific framing) and adds the bilateral-receipt and revocation-observed scenarios that AIP's model doesn't cover.
+
+### 18.9 Threat-model boundary
+
+§18.1–§18.8 close Bug 11 (P_BIND falsification) and tighten the audit / error-reporting surface. They do NOT extend protection against:
+
+* **A compromised holder key.** A key compromise lets the attacker compute valid `holder_proof` signatures over any `(req_id, cap_id, to_agent)` triple. Domain separation does not help against this. Mitigation is key rotation (§18.5) or revocation (§18.3 / out-of-band REVOKE beacon).
+* **Side-channel attacks on the Ed25519 implementation.** Library responsibility.
+* **Social engineering of the LLM driving an agent.** PACT operates below the LLM semantic layer; the substrate's signing checks are valid regardless of what prompt the LLM responds to. See D5 for empirical evidence across three independent LLM adversaries.
+* **Application-layer concerns beyond purpose-of-use.** `audit_context.purpose` is a coarse tag (`"task"`, `"delegation-step"`, etc.); fine-grained authorization is the caveat language's job (§18.4).
+
+These boundaries are deliberate; v1.4 closes the P_BIND surface specifically and tightens audit-context structure to enable downstream analysis.
+
+---
+
+## 19. Changes from v1.3.0-draft to v1.4.0-draft
+
+Line-item summary for implementers tracking the diff. Each row points to the §18 sub-section that defines the change normatively.
+
+| § | Change | Wire-affecting? | Reference impl version |
+|---|---|---|---|
+| §18.1 | `holder_proof` signature MUST be over canonical-JSON `{domain:"pact/hp/v1", req_id, cap_id, to_agent}`; visa-use signature MUST be over `{domain:"pact/visa/v1", nonce}`. Closes Bug 11 (P_BIND falsification, Tamarin Run 2 Finding #1). Verified by Tamarin Run 3 (`pact_core_v0_8.spthy`). | Yes (signature semantics tightened) | v0.8 |
+| §18.2 | New required REQ field `audit_context` with structured `{purpose, request_id, audience_hint, expires_at}` keys; covered by outer envelope signature. | Yes (new required field) | v0.8 |
+| §18.3 | Normative 12-code error taxonomy (`pact_token_missing` ... `pact_revocation_observed`) with HTTP status mapping. v0.7 implementations may emit different codes; v1.4 normalizes. | Yes (fault-code normalization) | v0.8 |
+| §18.4 | Three policy profiles (Simple / Standard / Advanced). Simple uses four templated caveat types with byte-normative canonical JSON; Standard adds custom predicates with bounded evaluation; Advanced permits third-party caveats. | Additive (Simple is v0.7-equivalent; Standard/Advanced are new) | v0.8 |
+| §18.5 | Identity document gains `public_keys` array with `valid_from` / `valid_until` overlap windows. Legacy single-key form accepted via migration. | Yes (additive in identity doc; receivers handle both) | v0.8 |
+| §18.6 | Bilateral receipts named normatively: receipt MUST carry both receiver and initiator-ack signatures. Receivers MAY advertise `bilateral_required: true`. | Mostly clarification | v0.8 |
+| §18.7 | Pre-v1.4 migration window: v0.7 bare-payload `holder_proof` and missing `audit_context` accepted with `DeprecationWarning` for 90 days from v1.4 release; rejected after. | Yes (transition semantics) | v0.8 |
+| §18.8 | Machine-readable attack scenario catalogue at `spec/attacks/attacks.json` shipped with spec. 12 scenarios mapped to formal lemmas and Stage 2 probes. | No (informative) | v0.8 |
+| §18.9 | Threat-model boundary: §18 closes P_BIND under PACT's Dolev-Yao + LLM-adversary model; key compromise, side channels, social engineering, application-layer authorization remain out of scope. | Clarification | v0.8 |
+
+**Versioning policy continued.** v1.3 → v1.4 indicates closure of the one remaining falsified formal lemma (P_BIND, via §18.1's domain separation), tightening of audit-context structure (§18.2), and adoption of patterns informed by an audit of AIP v0.3.0 (§18.4 policy profiles, §18.5 key rotation, §18.6 bilateral-receipt vocabulary). v1.4 verifiers accept v1.3 chain-link format unchanged and v0.7 `holder_proof` / `audit_context` formats during a 90-day migration window. The substrate's formal verification status improves from 8/9 lemmas (v1.3) to **9/9** (v1.4, per Tamarin Run 3). **Draft status (`-draft`) remains** until external validation — a second independent implementation passing the conformance checklist (§10) against the published test vectors (§11) and attack scenario catalogue (§18.8) is the gate for dropping `-draft`.
+
+**Test vectors.** A v1.4 vector update covering the new `holder_proof` payload structure, `audit_context` field, and policy-profile canonical forms is pending; the reference implementation's full test suite (`tests/`) exercises the v1.4 paths in the meantime.
+
+**Stage 2 evidence trail.** Phase A (D4) confirmed H1-H5 on v0.7 with 347/348 cross-machine cell agreement. Phase B + B-2 (D5) recorded 0 real findings across three independent LLM adversaries × 5 Gap-B coverage cells × 210 iterations on v0.7. Formal verification (D2 / Tamarin Run 3) closes the one remaining falsified lemma on v0.8. Re-run of Phase A/B/B-2 on v0.8 is scheduled and predicted to maintain v0.7's results, as v0.8 is a strict strengthening of v0.7's substrate.
+
+---
+
+## 20. Security Considerations (new in v1.4)
+
+This section is normative for v1.4 and informs implementations of the threat model PACT is designed against, the cryptographic assumptions it depends on, and the limitations it does not claim to address. The pre-registered Stage 2 methodology (`PACT_RESEARCH_PLAN.md`) and the deliverables it produced (D1, D4, D5, D6) are the empirical evidence for this section.
+
+### 20.1 Threat model
+
+PACT v1.4 is designed against:
+
+* **A Dolev-Yao network attacker** with the standard capabilities (intercept, modify, replay, drop, inject network messages; cannot break cryptographic primitives). This is the attacker model used by Tamarin (`spec/models/pact_core_v0_8.spthy`) and ProVerif (`spec/models/pact_opaque.pv`).
+* **An LLM-driven semantic adversary** running the agent at one or both ends of a PACT exchange. The LLM may produce arbitrary application-layer content; PACT's substrate operates below this layer (signature verification cannot be reached through prompt manipulation). D5 records empirical evidence across three independent LLM adversaries (gemma4:e4b, gemma3:12b, Qwen3-235B) producing 0 real findings across 210 iterations on v0.7.
+* **A maliciously-instructed delegating agent** (DELEG-MAL). Mitigated by Bug 9 chain-walk re-derivation (§16) and the bilateral-receipt requirement (§18.6).
+* **A peer-malicious agent** (PEER-MAL). Mitigated by holder-binding (§18.1) and capability attenuation (§5.2).
+* **A Sybil adversary attempting to forge `agent_id`**. Mitigated by self-certifying identity (§4.1) and SHA-256 collision resistance (§20.4).
+
+### 20.2 Out-of-scope concerns (deliberate)
+
+PACT explicitly does NOT address:
+
+* **Confidentiality of message contents.** The wire is signed but plaintext (§9). Implementations needing confidentiality MUST run PACT over an encrypted transport (HTTPS, Noise) but the substrate does not require it. Listed in `D1_threat_coverage_matrix.md` Gap class A as a documented limitation.
+* **Content sanitization of LLM outputs.** PACT signs whatever bytes the application produces; what those bytes mean to a downstream LLM is outside the substrate's scope. Empirical evidence: Phase A S-tier probes (S1-S6) confirm that 100% of LLM-emitted byte sequences pass through the substrate opaquely.
+* **Runtime cost enforcement.** §10 C4 lists this as a v0.8 hardening item. The current `budget_cents` caveat (§18.4.1) is author-declared; runtime measurement and enforcement is out of scope.
+* **Side-channel attacks on the Ed25519 implementation.** Library responsibility (e.g., libsodium / RustCrypto / Go x/crypto). PACT requires the library expose a constant-time signing primitive but does not validate this property.
+
+### 20.3 Documented adversary-model limitations
+
+The following are scenarios where PACT cannot defend against the attack class, by design:
+
+* **Key compromise (KEY-COMP).** An attacker holding the legitimate private key can produce all the signatures the legitimate holder can. The substrate provides no defense against this; mitigation is key rotation (§18.5) or revocation. D5 Phase B records 0 real findings across the KEY-COMP × {P-AUTH, P-BIND} coverage cells, confirming the substrate behaves correctly (accepts the stolen-key adversary as legitimate, per the design).
+* **Mutual collusion of all signers.** A bilateral receipt requires both parties to sign; if both parties are colluding, they can produce arbitrary receipts. PACT cannot distinguish honest from colluding signing.
+* **Application-layer time skew beyond bounded skew tolerance.** `audit_context.expires_at` and `caveat.expires_at` are interpreted against the receiver's clock; receivers MAY tolerate up to 60 seconds of skew but MUST reject signatures more than 60 seconds in the future.
+
+### 20.4 Cryptographic assumptions
+
+PACT v1.4 depends on:
+
+* **Ed25519 EUF-CMA security** (RFC 8032). Used for all signature operations.
+* **SHA-256 collision resistance** (FIPS 180-4). Used for `agent_id` derivation (§4.1) and content hashing in caveats.
+* **Canonical JSON determinism** (§3). Used to ensure that a given object always produces the same byte sequence for signing across implementations.
+* **Ed25519 implementation constant-timeness.** The signing operation MUST NOT leak the private key via timing. This is the responsibility of the underlying library; PACT does not test for it.
+
+A future failure of any of these assumptions (e.g., Ed25519 broken by post-quantum cryptanalysis, SHA-256 collisions become tractable) would necessitate a v2 substrate redesign, not a v1.x amendment.
+
+### 20.5 Domain separation discipline
+
+§18.1's `domain` field carries the literal strings `"pact/hp/v1"` and `"pact/visa/v1"`. The discipline:
+
+* Each distinct signature class (holder_proof, visa-use, receipt, cap-chain-link, identity-doc-self-signature, REVOKE beacon, etc.) MUST sign over a canonical-JSON payload whose first field is `"domain"` with a literal string identifying the class and version.
+* Two signature classes MUST NOT share a domain tag.
+* When a signature class is extended in a way that changes the signed-payload structure, the domain version MUST bump (e.g., `"pact/hp/v1"` → `"pact/hp/v2"`).
+
+This discipline is what enables Tamarin to prove P_BIND on v1.4 (`pact_core_v0_8.spthy`) and what protects against the class of cross-context-replay attacks that the v0.7 falsification trace exhibited.
+
+### 20.6 Revocation freshness
+
+A revocation record's effect is monotonic — once revoked, always revoked from that timestamp forward. However, propagation of the revocation between agents is bounded:
+
+* The v0.8 REVOKE beacon mechanism (separate spec, post-v1.4) SHOULD propagate revocations to all subscribed peers within 60 seconds of revocation issuance.
+* Receivers MAY cache revocation records for up to 5 minutes between fetches to a revocation oracle.
+* A receiver that has not consulted a revocation oracle within the cache window MAY accept a REQ whose signer was revoked outside that window, then later emit a cancelled receipt (§14.9) on observing the revocation.
+
+This means there is a 5-minute (worst case) window in which a revoked key can still produce accepted signatures. Bilateral receipts make this window auditable: a third party reviewing the receipts can detect signatures produced after the revocation timestamp.
+
+### 20.7 Bilateral-receipt non-repudiation
+
+A bilateral receipt (§18.6) is non-repudiable in the standard cryptographic sense iff:
+
+1. Both signatures verify under their claimed signers' valid (non-revoked, within-window) keys, AND
+2. The receipt's `audit_context.expires_at` is in the past at the time of audit (the receipt has run its course).
+
+A receipt missing either signature is *not* a non-repudiable artifact and SHOULD NOT be presented as audit evidence between distrustful parties.
+
+A receipt produced after one party's key has been revoked (§20.6) is non-repudiable only if the revocation post-dates the receipt; otherwise the receipt is suspect.
+
+### 20.8 Implementation hardening checklist
+
+This checklist is informative. Implementations claiming v1.4 conformance SHOULD verify all of the following:
+
+* [ ] Ed25519 implementation is constant-time (verified externally — e.g., libsodium documentation, RustCrypto audit, Go x/crypto release notes).
+* [ ] Canonical JSON implementation matches §3 byte-for-byte against the published test vectors.
+* [ ] All `holder_proof` signing sites compute over the §18.1 structured payload — verified by running the negative-control probe (`probe_attr_bind_xmachine.py` or equivalent) and confirming the substrate rejects with `pact_holder_proof_invalid`.
+* [ ] All REQ producers emit non-empty `audit_context` with all four required fields.
+* [ ] All REQ receivers reject malformed `audit_context` with `pact_token_malformed`.
+* [ ] All RES producers emit receiver-signature; all RES consumers emit initiator-ack-signature when in bilateral mode.
+* [ ] Identity-document parser handles both legacy single-key and v1.4 `public_keys` array forms.
+* [ ] Revocation cache respects the 5-minute upper bound (§20.6).
+* [ ] All 12 catalogued attack scenarios (§18.8 / `spec/attacks/attacks.json`) produce the predicted fault codes when run against the implementation.
+
+Formal verification status: Tamarin Run 3 verifies the v1.4 design under the Dolev-Yao + perfect-cryptography assumptions. The implementation hardening checklist above bridges from the formal proof to the deployed code.
