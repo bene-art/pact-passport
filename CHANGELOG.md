@@ -5,6 +5,85 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-06-19
+
+Enforcement-side plumbing of the v0.8.0 library modules into the dispatch
+pipeline (per Option D split). Wire-compatible with v0.8.0. Closes 4 of the
+5 dispatch integration gaps surfaced in the v0.8.0 status review; the 5th
+(bilateral receipt round-trip via `INITIATOR_ACK` + remaining 9 of 13
+fault codes) ships in v0.8.2.
+
+Pre-registered at tag `v0.8.1-pre-registration` (commit local). 468 dynamic
+tests pass (+56 from v0.8.0's 412); 9/9 formal lemmas unchanged.
+
+### Added
+
+- **`audit_req` plumbed into `_handle_task` dispatch pipeline** (spec §18.2).
+  New `_step_audit_req` runs after `_step_verify_sender` and before
+  `_step_verify_capability` — cheap-first ordering. Failures short-circuit
+  with the matching v1.4 `pact_*` fault code.
+- **`audit_req` plumbed into `_handle_visa_request`** (symmetric to task flow).
+  Same migration-window semantics.
+- **HTTP status mapping at transport layer** (spec §18.3). `_status_for_response`
+  in `transport/server.py` reads `fault.code`, maps to 401 / 403 / 410 via
+  `FAULT_HTTP_STATUS`. Wired into both sync (`ThreadingHTTPServer`) and async
+  (uvicorn) servers. Audit-side fault codes map to spec §18.3 statuses;
+  legacy fault codes keep v0.7 behavior of HTTP 200 with fault in body until
+  v0.8.2 completes the roll-out.
+- **`audit_context_strict` constructor kwarg** on `PACTAgent`. Default False
+  during the §18.7 90-day migration window — a missing `audit_context` is
+  accepted with `DeprecationWarning` so v0.7 senders interoperate. Present-
+  but-malformed `audit_context` is always rejected. Default flips to True
+  in v0.9.
+- **Public-API surface for v0.8 library modules.** `pact_passport.__init__`
+  re-exports the policy module (`PolicyProfile`, `evaluate_caveats`,
+  `make_*_caveat` factories, `classify_*_profile`), the audit module
+  (`audit_req`, `audit_receipt`, `make_bilateral_receipt`,
+  `sign_initiator_ack`, `AuditResult`), and the fault taxonomy
+  (`ALL_FAULT_CODES`, `FAULT_HTTP_STATUS`, `http_status_for_fault`).
+- **CLI v0.8 surface** (gap 6):
+  - `pact audit <receipt_id|-> [--show-receipt]` — runs `audit_receipt` on a
+    stored receipt (looked up by id or task_ref prefix) or stdin JSON.
+    Prints `AuditResult` and exits non-zero on failure.
+  - `pact receipts --bilateral-only` — filters out unilateral receipts.
+  - `pact ask --audit-purpose <tag>` — sets `audit_context.purpose` on
+    outgoing REQ (default: `"task"`).
+- **`PACTAgent.ask(..., audit_purpose: str = "task")`** kwarg flows the CLI
+  flag through to `build_req`.
+
+### Changed
+
+- **`audit.py`**: `audience_hint` MAY be empty (visa-request broadcast form
+  where the sender doesn't know the gatekeeper's `agent_id` pre-visa). Other
+  required `audit_context` keys MUST still be non-empty strings.
+- **`tests/integration/test_v_tier_v1_v7.py`** helper `_build_task_with_visa`
+  updated to include `audit_context` (was bypassing `build_req`).
+
+### Library-complete vs dispatch-integrated (Option D split)
+
+- **v0.8.0** — library modules + spec + tests + formal-verification freeze.
+- **v0.8.1 (this release)** — plumbs `audit_req` enforcement (REQ + V-tier),
+  audit-side `pact_*` fault codes + HTTP mapping, `policy` + `audit` public
+  API exposure, CLI v0.8 surface. 4 of 5 dispatch gaps closed.
+- **v0.8.2 (planned)** — bilateral receipt wire round-trip via new
+  `INITIATOR_ACK` message type (spec §18.6), completion of the 9 remaining
+  `pact_*` fault codes across capability + replay + rate + bind dispatch sites.
+
+### Tests
+
+416 → 468 dynamic (+52). Conformance unit tests (`tests/v1_4/`) unchanged
+at 81. New dispatch integration tests under `tests/v1_4/dispatch/` (44 tests)
+and CLI tests under `tests/v1_4/cli/` (8 tests). Total 469 collected with
+1 strict-xfail (B0_TLS).
+
+### Pre-registration evidence (v0.8.0 frozen baseline)
+
+Tag `v0.8.0-pre-registration` (commit `f29b56c`) remains the load-bearing
+frozen artifact for the paper. v0.8.1 is an enforcement-side release; the
+substrate's H1-H5 verdicts and §12 attribution diagonal are confirmed by
+re-running Phase A on the v0.8.1 tag (see `D4_SUMMARY.md` §6 once Phase ε.1
+completes).
+
 ## [0.8.0] — 2026-06-18
 
 Substrate upgrade informed by external audit of [AIP v0.3.0](https://github.com/sunilp/aip) (`draft-prakash-aip-00`). Closes Bug 11 (P_BIND falsification) via domain-separated signing strings. Adds structured audit context, normative fault taxonomy, three-profile policy model, and bilateral-receipt floor. Spec v1.3.0-draft → v1.4.0-draft. Pre-registered at tag `v0.8.0-pre-registration` (commit `f29b56c`) — the frozen artifact the HotNets paper evidence cites.
@@ -295,6 +374,7 @@ Initial public release.
 - Deterministic test vectors.
 - 111 unit tests.
 
+[0.8.1]: https://github.com/bene-art/pact-passport/releases/tag/v0.8.1-pre-registration
 [0.8.0]: https://github.com/bene-art/pact-passport/releases/tag/v0.8.0-pre-registration
 [0.7.1]: https://github.com/bene-art/pact-passport/releases/tag/v0.7.1
 [0.7.0]: https://github.com/bene-art/pact-passport/releases/tag/v0.7.0
