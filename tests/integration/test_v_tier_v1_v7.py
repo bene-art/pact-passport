@@ -86,18 +86,26 @@ def _build_task_with_visa(
     """Build a signed task REQ presenting the visa. ``holder_proof``
     signs ``nonce_to_sign`` (visa nonce) rather than ``msg.id``.
     """
+    msg_id = str(uuid.uuid4())
+    deadline = (datetime.now(UTC) + timedelta(seconds=30)).isoformat()
     msg = PACTMessage(
-        id=str(uuid.uuid4()),
+        id=msg_id,
         type="REQ",
         from_agent=stranger.agent_id,
         to_agent=gatekeeper_agent_id,
         intent="task",
         cap_id=visa_dict["cap_id"],
         cap_envelope=visa_dict,
-        deadline=(datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+        deadline=deadline,
         idempotency_key=str(uuid.uuid4()),
         payload=payload_extra or {},
         identity_doc=stranger.identity_doc,
+        audit_context={
+            "purpose": "task",
+            "request_id": msg_id,
+            "audience_hint": gatekeeper_agent_id,
+            "expires_at": deadline,
+        },
     )
     # Holder proof signs the visa's server-issued nonce (V-tier).
     proof_sig = crypto.sign(nonce_to_sign.encode(), stranger.private_key)

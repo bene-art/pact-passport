@@ -27,6 +27,7 @@ from pact_passport.message import (
     PACTMessage, build_req, build_res, build_res_chunk, verify_message,
     verify_holder_proof, is_deadline_exceeded,
 )
+from pact_passport.audit import audit_req
 from pact_passport.errors import HandlerFailure
 from pact_passport.receipt import create_receipt
 from pact_passport.store import PACTStore
@@ -93,6 +94,7 @@ class PACTAgent:
         max_deadline_seconds: int = 3600,
         visa_policy: VisaPolicy | None = None,
         advertise_protocol: ProtocolAdvertisement | None = None,
+        audit_context_strict: bool = False,
     ):
         self.name = name
         self.capabilities = capabilities or []
@@ -146,6 +148,14 @@ class PACTAgent:
         # responses. The field is normatively inert on receive
         # (MUST-NOT consumed); no code path acts on a received value.
         self.advertise_protocol = advertise_protocol
+        # v0.8.1 / spec §18.2 — enforce structured audit_context on REQs.
+        # Default False during the §18.7 90-day migration window: a missing
+        # audit_context is accepted with DeprecationWarning so v0.7 senders
+        # continue to interoperate. Present-but-malformed audit_context is
+        # always rejected (audience mismatch, expiry, structure) because
+        # the sender has declared v1.4 conformance by emitting the field.
+        # Default flips to True in v0.9.
+        self.audit_context_strict = audit_context_strict
 
     def _ensure_identity(self) -> Identity:
         """Load or create the agent's identity."""
@@ -303,6 +313,7 @@ class PACTAgent:
                 self._step_check_deadline,
                 self._step_idempotency_lookup,
                 self._step_verify_sender,
+                self._step_audit_req,
                 self._step_verify_capability,
                 self._step_resolve_action,
             ):
@@ -350,6 +361,29 @@ class PACTAgent:
                 "request_visa signature did not verify under presented identity",
             )
         ctx.sender_pub = sender_pub
+
+        # v0.8.1 / spec §18.2 — audit_context enforcement (visa flow).
+        # Symmetric to _step_audit_req on the task pipeline. Missing
+        # audit_context warned during the §18.7 migration window; malformed
+        # audit_context rejected unconditionally.
+        if msg.audit_context is None:
+            if self.audit_context_strict:
+                return self._dispatch_err(
+                    ctx, "pact_token_malformed",
+                    "request_visa REQ is missing required audit_context field (spec §18.2)",
+                )
+            warnings.warn(
+                "Accepting v0.7 request_visa without audit_context (spec §18.2). "
+                "v1.4 receivers MUST reject this format after the migration window "
+                "closes (spec §18.7).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        else:
+            audit_result = audit_req(msg)
+            if not audit_result.passed and audit_result.errors:
+                code, detail = audit_result.errors[0]
+                return self._dispatch_err(ctx, code, detail)
 
         requested_action = msg.payload.get("action") if msg.payload else None
         if not isinstance(requested_action, str) or not requested_action:
@@ -574,6 +608,45 @@ class PACTAgent:
                 return self._dispatch_err(ctx, "invalid_signature",
                                           "Message signature verification failed")
         ctx.sender_pub = sender_pub
+        return None
+
+    def _step_audit_req(self, ctx: _DispatchCtx) -> dict | None:
+        """v0.8.1: spec §18.2 audit_context enforcement at dispatch.
+
+        Runs ``audit_req`` (no key args — signature was checked in
+        ``_step_verify_sender``) so only the audit_context structural and
+        audience-binding checks fire.
+
+        Migration window (spec §18.7 spirit): a *missing* ``audit_context``
+        field on the REQ is treated as a legacy v0.7 form — accepted with
+        ``DeprecationWarning`` unless ``audit_context_strict=True`` was set
+        on the agent. A *present-but-malformed* ``audit_context`` is always
+        rejected (audience mismatch, expiry, structure errors) because the
+        sender has declared v1.4 conformance by emitting the field.
+
+        Each rejection short-circuits the pipeline with a wire-level
+        ``pact_*`` fault code from the §18.3 taxonomy.
+        """
+        if ctx.msg.audit_context is None:
+            if self.audit_context_strict:
+                return self._dispatch_err(
+                    ctx, "pact_token_malformed",
+                    "REQ is missing required audit_context field (spec §18.2)",
+                )
+            warnings.warn(
+                "Accepting v0.7 REQ without audit_context (spec §18.2). "
+                "v1.4 receivers MUST reject this format after the migration "
+                "window closes (spec §18.7). Update senders to v1.4 "
+                "structured audit_context.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            return None
+
+        result = audit_req(ctx.msg)
+        if not result.passed and result.errors:
+            code, detail = result.errors[0]
+            return self._dispatch_err(ctx, code, detail)
         return None
 
     def _step_verify_capability(self, ctx: _DispatchCtx) -> dict | None:

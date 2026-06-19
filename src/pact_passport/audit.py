@@ -152,7 +152,17 @@ def audit_req(
                     f"audit_context missing required keys: {sorted(missing)}",
                 )
             for key in REQUIRED_AUDIT_CONTEXT_KEYS & set(ctx):
-                if not isinstance(ctx[key], str) or not ctx[key].strip():
+                value = ctx[key]
+                if not isinstance(value, str):
+                    result.add_error(
+                        PACT_TOKEN_MALFORMED,
+                        f"audit_context.{key} must be a string",
+                    )
+                    continue
+                # audience_hint MAY be empty (visa-request broadcast form,
+                # where sender doesn't know the gatekeeper's agent_id pre-visa).
+                # Other keys MUST be non-empty.
+                if key != "audience_hint" and not value.strip():
                     result.add_error(
                         PACT_TOKEN_MALFORMED,
                         f"audit_context.{key} must be a non-empty string",
