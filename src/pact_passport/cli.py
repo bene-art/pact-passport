@@ -130,6 +130,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
         action=args.action,
         payload=payload,
         deadline_seconds=args.deadline,
+        audit_purpose=getattr(args, "audit_purpose", "task"),
     )
 
     if result.get("status") == "error":
@@ -159,17 +160,91 @@ def cmd_receipts(args: argparse.Namespace) -> None:
             return
 
     receipts = store.list_receipts(name)
+    if getattr(args, "bilateral_only", False):
+        receipts = [r for r in receipts if r.get("initiator_ack_signature")]
     if not receipts:
-        print(f"No receipts for agent '{name}'.")
+        if getattr(args, "bilateral_only", False):
+            print(f"No bilateral receipts for agent '{name}'.")
+        else:
+            print(f"No receipts for agent '{name}'.")
         return
 
-    print(f"{'TIMESTAMP':<28} {'TASK REF':<12} {'OUTCOME'}")
-    print(f"{'-'*28} {'-'*12} {'-'*12}")
+    header = f"{'TIMESTAMP':<28} {'TASK REF':<12} {'OUTCOME':<10}"
+    if getattr(args, "bilateral_only", False):
+        header += "  BILATERAL"
+    print(header)
+    print(f"{'-'*28} {'-'*12} {'-'*10}")
     for r in receipts:
         ts = r.get("timestamp", "?")[:26]
         ref = r.get("task_ref", "?")[:10]
         outcome = r.get("outcome", "?")
-        print(f"{ts:<28} {ref:<12} {outcome}")
+        line = f"{ts:<28} {ref:<12} {outcome:<10}"
+        if getattr(args, "bilateral_only", False):
+            line += "  ✓"
+        print(line)
+
+
+def cmd_audit(args: argparse.Namespace) -> None:
+    """v0.8.1: audit a stored receipt for spec §18.6 bilateral hygiene.
+
+    Looks up a receipt by id (or task_ref prefix), runs ``audit_receipt``
+    with the agent's own public key as the receiver key. Prints the
+    AuditResult JSON. If the receipt carries an ``initiator_ack_signature``
+    the audit also verifies it when the initiator's public key is in the
+    agent's known-peers cache.
+    """
+    from pact_passport.agent import PACTAgent
+    from pact_passport.audit import audit_receipt
+
+    store = _get_store()
+    name = args.agent
+
+    if not name:
+        agents = store.list_agents()
+        if len(agents) == 1:
+            name = agents[0]
+        elif not agents:
+            print("No local agents found. Run: pact init <name>")
+            sys.exit(1)
+        else:
+            print("Multiple agents found. Specify with: pact audit --agent <name> <receipt_id>")
+            sys.exit(1)
+
+    if not store.has_agent(name):
+        print(f"Agent '{name}' not found. Run: pact init {name}")
+        sys.exit(1)
+
+    # Resolve the receipt: either from stdin, by exact id, or by task_ref prefix.
+    if args.receipt_id == "-":
+        try:
+            receipt = json.loads(sys.stdin.read())
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON on stdin: {e}")
+            sys.exit(1)
+    else:
+        receipts = store.list_receipts(name)
+        receipt = None
+        for r in receipts:
+            if r.get("id") == args.receipt_id:
+                receipt = r
+                break
+            if r.get("task_ref", "").startswith(args.receipt_id):
+                receipt = r
+                break
+        if receipt is None:
+            print(f"No receipt matching '{args.receipt_id}' for agent '{name}'.")
+            sys.exit(1)
+
+    agent = PACTAgent(name=name)
+    identity = agent._ensure_identity()
+    result = audit_receipt(receipt, receiver_public_key=identity.public_key)
+
+    if args.show_receipt:
+        print(json.dumps(receipt, indent=2))
+        print("---")
+    print(json.dumps(result.to_dict(), indent=2))
+    if not result.passed:
+        sys.exit(1)
 
 
 def cmd_identity(args: argparse.Namespace) -> None:
@@ -476,10 +551,19 @@ def main() -> None:
     p_ask.add_argument("payload", nargs="?", default=None, help="JSON payload")
     p_ask.add_argument("--agent", "-a", default=None, help="Local agent name")
     p_ask.add_argument("--deadline", "-d", type=int, default=30, help="Deadline in seconds")
+    # v0.8.1 / spec §18.2 audit_context fields
+    p_ask.add_argument(
+        "--audit-purpose", default="task",
+        help="audit_context.purpose tag (spec §18.2). Default: 'task'",
+    )
 
     # pact receipts
     p_receipts = sub.add_parser("receipts", help="List audit receipts")
     p_receipts.add_argument("--agent", "-a", default=None, help="Agent name")
+    p_receipts.add_argument(
+        "--bilateral-only", action="store_true",
+        help="Only show receipts with a non-empty initiator_ack_signature (spec §18.6)",
+    )
 
     # pact identity
     p_identity = sub.add_parser("identity", help="Show agent identity document")
@@ -519,6 +603,18 @@ def main() -> None:
     p_trace.add_argument("msg_id", help="Message ID to trace")
     p_trace.add_argument("--agent", "-a", default=None, help="Agent name")
 
+    # pact audit (v0.8.1 / spec §18.2 + §18.6)
+    p_audit = sub.add_parser("audit", help="Audit a stored receipt for v1.4 hygiene")
+    p_audit.add_argument(
+        "receipt_id",
+        help="Receipt ID (or task_ref prefix) to audit; or '-' to read JSON from stdin",
+    )
+    p_audit.add_argument("--agent", "-a", default=None, help="Agent name")
+    p_audit.add_argument(
+        "--show-receipt", action="store_true",
+        help="Print the receipt JSON in addition to the audit result",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -544,6 +640,7 @@ def main() -> None:
         "revoke": cmd_revoke,
         "caps": cmd_caps,
         "trace": cmd_trace,
+        "audit": cmd_audit,
     }
 
     fn = commands.get(args.command)

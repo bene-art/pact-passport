@@ -1080,6 +1080,7 @@ class PACTAgent:
         action: str,
         payload: dict | None = None,
         deadline_seconds: int = 30,
+        audit_purpose: str = "task",
     ) -> dict:
         """Send a task REQ to another agent. Auto-handshake on first contact."""
         identity = self._ensure_identity()
@@ -1116,6 +1117,7 @@ class PACTAgent:
             cap_id=cap.cap_id if cap else None,
             holder_proof_key=identity._private_key if cap else None,
             deadline_seconds=deadline_seconds,
+            audit_purpose=audit_purpose,
         )
 
         result = send_message(base_url, msg, timeout=deadline_seconds)
