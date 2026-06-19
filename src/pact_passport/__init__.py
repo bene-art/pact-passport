@@ -2,18 +2,31 @@
 
 Self-certifying identity (Ed25519 + KERI-style pre-rotation), holder-bound
 capability tokens (Macaroons-style attenuable), three message types
-(REQ / RES / RES_CHUNK), unilateral audit receipts. Built at the edges.
+(REQ / RES / RES_CHUNK), bilaterally-signed audit receipts (v0.8 floor).
+Built at the edges.
 """
 
 from pact_passport._version import __version__
 from pact_passport.agent import PACTAgent
-from pact_passport.errors import HandlerFailure
+from pact_passport.audit import (
+    AuditResult,
+    audit_receipt,
+    audit_req,
+    make_bilateral_receipt,
+    sign_initiator_ack,
+)
 from pact_passport.capability import (
     CapabilityToken,
     Caveat,
     attenuate,
     issue_capability,
     verify_capability,
+)
+from pact_passport.errors import (
+    ALL_FAULT_CODES,
+    FAULT_HTTP_STATUS,
+    HandlerFailure,
+    http_status_for_fault,
 )
 from pact_passport.identity import Identity
 from pact_passport.message import (
@@ -27,6 +40,17 @@ from pact_passport.message import (
     verify_holder_proof,
     verify_message,
     visa_use_payload,
+)
+from pact_passport.policy import (
+    PolicyProfile,
+    PolicyProfileError,
+    classify_cap_profile,
+    classify_caveat_profile,
+    evaluate_caveats,
+    make_action_caveat,
+    make_budget_caveat,
+    make_depth_caveat,
+    make_expiry_caveat,
 )
 from pact_passport.receipt import create_receipt, verify_receipt
 from pact_passport.transport.client import (
@@ -51,6 +75,24 @@ __all__ = [
     # v1.4 / v0.8 domain separation (spec §18.1)
     "HOLDER_PROOF_DOMAIN_V1",
     "VISA_USE_DOMAIN_V1",
+    # v1.4 / v0.8 audit + policy (spec §18.2, §18.4, §18.6)
+    "ALL_FAULT_CODES",
+    "AuditResult",
+    "FAULT_HTTP_STATUS",
+    "PolicyProfile",
+    "PolicyProfileError",
+    "audit_receipt",
+    "audit_req",
+    "classify_cap_profile",
+    "classify_caveat_profile",
+    "evaluate_caveats",
+    "http_status_for_fault",
+    "make_action_caveat",
+    "make_bilateral_receipt",
+    "make_budget_caveat",
+    "make_depth_caveat",
+    "make_expiry_caveat",
+    "sign_initiator_ack",
     # Capabilities
     "CapabilityToken",
     "Caveat",
