@@ -53,6 +53,7 @@ ONLY_CONFIG=""
 ONLY_PROBE=""
 DRY_RUN=0
 SKIP_EXISTING=0
+RESUME_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -60,6 +61,7 @@ while [[ $# -gt 0 ]]; do
         --probe)  ONLY_PROBE="$2"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --skip-existing) SKIP_EXISTING=1; shift ;;
+        --resume-dir) RESUME_DIR="$2"; SKIP_EXISTING=1; shift 2 ;;
         -h|--help)
             grep '^#' "$0" | sed 's/^# \?//'
             exit 0
@@ -111,9 +113,15 @@ export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 python -c "from pact_passport import _ablations; from tests.stage2 import _ablations as h; print('ablation modules OK:', h.ABLATION_NAMES)" \
     || die "ablation modules failed to import"
 
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-OUT_ROOT="tests/stage2/results_phase_a_${TS}"
-log "Phase A run starting"
+if [[ -n "$RESUME_DIR" ]]; then
+    [[ -d "$RESUME_DIR" ]] || die "--resume-dir '$RESUME_DIR' not found"
+    OUT_ROOT="$RESUME_DIR"
+    log "Phase A run resuming into existing dir (--skip-existing implied)"
+else
+    TS=$(date -u +%Y%m%dT%H%M%SZ)
+    OUT_ROOT="tests/stage2/results_phase_a_${TS}"
+    log "Phase A run starting"
+fi
 log "  run dir:  $OUT_ROOT"
 log "  configs:  ${CONFIGS[*]}"
 log "  probes:   ${#PROBES[@]} (${PROBES[*]:0:3}...)"
