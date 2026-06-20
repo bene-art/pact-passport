@@ -268,6 +268,13 @@ class PACTAgent:
 
         msg = PACTMessage.from_dict(body)
 
+        # v0.8.2 / spec §18.6 — INITIATOR_ACK closes the bilateral receipt
+        # round-trip. Routed by message TYPE, not intent: the ack is a
+        # post-RES envelope from the initiator that turns the receiver's
+        # unilateral receipt into a bilateral one.
+        if msg.type == "INITIATOR_ACK":
+            return self._handle_initiator_ack(msg, identity, remote_addr)
+
         # Intent: identity
         if msg.intent == "identity":
             res = build_res(
@@ -321,6 +328,117 @@ class PACTAgent:
                 if result is not None:
                     return result
             return self._step_run_handler(ctx)
+
+    def _handle_initiator_ack(
+        self,
+        msg: PACTMessage,
+        identity: Identity,
+        remote_addr: tuple | None,
+    ) -> dict:
+        """v0.8.2 / spec §18.6 — close a bilateral receipt round-trip.
+
+        Spec §18.6: the initiator signs the canonical-JSON form of the
+        receiver's unilateral receipt MINUS the ``initiator_ack_signature``
+        field. Sending that signature back to the receiver as an
+        ``INITIATOR_ACK`` message lets the receiver merge it into the stored
+        receipt and promote it to a bilateral receipt.
+
+        Payload shape: ``{"task_ref": str, "initiator_ack_signature": str}``
+        where ``initiator_ack_signature`` is base64-encoded Ed25519.
+
+        Faults emitted (spec §18.3):
+
+        * ``pact_signature_invalid`` — outer envelope sig or ack sig invalid.
+        * ``pact_token_malformed`` — payload missing fields or wrong shape.
+        * ``pact_token_missing`` — no receipt found for the referenced task_ref.
+        * ``pact_identity_unresolvable`` — sender unknown and no identity_doc.
+        """
+        from pact_passport.errors import (
+            PACT_IDENTITY_UNRESOLVABLE,
+            PACT_SIGNATURE_INVALID,
+            PACT_TOKEN_MALFORMED,
+            PACT_TOKEN_MISSING,
+        )
+
+        ctx = _DispatchCtx(msg=msg, identity=identity, remote_addr=remote_addr)
+
+        # Resolve sender (TOFU-allowing for fresh peers in INITIATOR_ACK).
+        sender_pub = self._resolve_sender_key(msg.from_agent)
+        if sender_pub is None and msg.identity_doc:
+            sender_pub = self._tofu_register(msg.from_agent, msg.identity_doc)
+        if sender_pub is None:
+            return self._dispatch_err(
+                ctx, PACT_IDENTITY_UNRESOLVABLE,
+                f"INITIATOR_ACK sender {msg.from_agent[:24]}... is unknown "
+                f"and no identity_doc was provided",
+            )
+
+        # Verify outer envelope signature.
+        if not verify_message(msg, sender_pub):
+            return self._dispatch_err(
+                ctx, PACT_SIGNATURE_INVALID,
+                "INITIATOR_ACK envelope signature did not verify",
+            )
+
+        # Extract payload fields.
+        payload = msg.payload or {}
+        task_ref = payload.get("task_ref")
+        ack_sig_b64 = payload.get("initiator_ack_signature")
+        if not isinstance(task_ref, str) or not task_ref:
+            return self._dispatch_err(
+                ctx, PACT_TOKEN_MALFORMED,
+                "INITIATOR_ACK payload must include a non-empty 'task_ref'",
+            )
+        if not isinstance(ack_sig_b64, str) or not ack_sig_b64:
+            return self._dispatch_err(
+                ctx, PACT_TOKEN_MALFORMED,
+                "INITIATOR_ACK payload must include a non-empty 'initiator_ack_signature'",
+            )
+
+        # Find the unilateral receipt by task_ref.
+        receipts = self._store.list_receipts(self.name)
+        receipt = next((r for r in receipts if r.get("task_ref") == task_ref), None)
+        if receipt is None:
+            return self._dispatch_err(
+                ctx, PACT_TOKEN_MISSING,
+                f"No receipt for task_ref={task_ref!r}; cannot promote to bilateral",
+            )
+
+        # Already-bilateral receipts: idempotent OK.
+        if receipt.get("initiator_ack_signature") == ack_sig_b64:
+            res = build_res(
+                identity._private_key, identity.agent_id, msg,
+                payload={"task_ref": task_ref, "bilateral": True, "idempotent": True},
+            )
+            return res.to_dict()
+
+        # Verify the ack signature against the receipt's canonical bytes
+        # MINUS the ack field (spec §18.6 binding).
+        signable = {k: v for k, v in receipt.items()
+                    if k != "initiator_ack_signature"}
+        try:
+            sig_bytes = base64.b64decode(ack_sig_b64)
+        except (binascii.Error, ValueError, TypeError):
+            return self._dispatch_err(
+                ctx, PACT_SIGNATURE_INVALID,
+                "INITIATOR_ACK signature is malformed base64",
+            )
+        if not crypto.verify(canonical_json(signable), sig_bytes, sender_pub):
+            return self._dispatch_err(
+                ctx, PACT_SIGNATURE_INVALID,
+                "INITIATOR_ACK signature does not verify against the receipt",
+            )
+
+        # Merge and persist. The receipt now carries both the receiver's
+        # original signature and the initiator's ack — bilateral.
+        receipt["initiator_ack_signature"] = ack_sig_b64
+        self._store.save_receipt(self.name, receipt)
+
+        res = build_res(
+            identity._private_key, identity.agent_id, msg,
+            payload={"task_ref": task_ref, "bilateral": True},
+        )
+        return res.to_dict()
 
     def _handle_visa_request(
         self,

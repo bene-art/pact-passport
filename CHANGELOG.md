@@ -5,6 +5,78 @@ All notable changes to PACT Passport are recorded in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] — 2026-06-20
+
+Closes the bilateral-receipt round-trip from spec §18.6 by adding a fourth
+PACT message type, `INITIATOR_ACK`, and a server-side dispatch handler that
+promotes stored unilateral receipts to bilateral when the initiator's ack
+signature verifies. Wire-compatible with v0.8.0 and v0.8.1 — old servers
+that see `type="INITIATOR_ACK"` route through the existing dispatch and
+fall through with no fatal error; they simply do not perform the merge.
+
+Pre-registered at tag `v0.8.2-pre-registration` (commit local). 477 dynamic
+tests pass (+9 from v0.8.1's 468); 9/9 formal lemmas unchanged.
+
+### Added
+
+- **`type="INITIATOR_ACK"` PACT message type** (spec §18.6). Same wire route
+  (`/pact/v1/messages`), same Ed25519 signing envelope, same canonical-JSON
+  encoding — only the discriminator changes. Routed inside ``_dispatch`` by
+  message type, before intent dispatch.
+- **`_handle_initiator_ack` dispatch handler** (`agent.py`). Verifies the
+  outer envelope sig, parses the `{task_ref, initiator_ack_signature}`
+  payload, looks up the unilateral receipt by `task_ref`, verifies the
+  ack signature against the receipt's canonical bytes minus the
+  `initiator_ack_signature` field (spec §18.6 binding), and merges the
+  ack into the stored receipt. The receipt is then bilateral.
+- **Idempotent ack semantics** — sending the same INITIATOR_ACK twice
+  returns `{"bilateral": true, "idempotent": true}` without re-mutating
+  the receipt.
+- **Fault codes emitted** (spec §18.3): `pact_signature_invalid` (envelope
+  or ack sig invalid), `pact_token_malformed` (missing payload fields),
+  `pact_token_missing` (no receipt for the referenced task_ref),
+  `pact_identity_unresolvable` (unknown sender with no inline `identity_doc`).
+
+### Changed
+
+- **Capability dispatch ergonomics** unchanged; the bilateral-receipt
+  path is purely additive. v0.8.1 unilateral receipts continue to verify
+  as before; v0.8.2 enables (but does not require) the bilateral upgrade
+  via INITIATOR_ACK.
+
+### Tests
+
+468 → 477 dynamic (+9). New `tests/v1_4/dispatch/test_initiator_ack.py`
+covers the happy path (receipt mutated to bilateral, audit_receipt then
+passes), idempotent re-ack, 4 fault classes (malformed payload, missing
+receipt, bad ack signature, unknown sender + no identity_doc), malformed
+base64, and end-to-end audit_receipt verification before-and-after.
+
+### Library-complete vs dispatch-integrated (Option D split, COMPLETE)
+
+- **v0.8.0** — library modules + spec + tests + formal-verification freeze.
+- **v0.8.1** — plumbed audit_req (REQ + V-tier), audit-side `pact_*` fault
+  codes + HTTP mapping, policy + audit public-API exposure, CLI v0.8 surface.
+- **v0.8.2 (this release)** — bilateral receipt wire round-trip via new
+  `INITIATOR_ACK` message type (spec §18.6). 4 of the remaining 9 `pact_*`
+  fault codes (`pact_signature_invalid`, `pact_token_malformed`,
+  `pact_token_missing`, `pact_identity_unresolvable`) are now wired at the
+  new dispatch site. The remaining 5 (`pact_key_revoked`, `pact_scope_insufficient`,
+  `pact_budget_exceeded`, `pact_depth_exceeded`, `pact_revocation_observed`)
+  ship as part of the library API and Simple-policy evaluation; their
+  full dispatch-site migration tracks into v0.9 alongside capability +
+  replay + rate + bind dispatch refactoring.
+
+### Pre-registration evidence (across the v0.8.x series)
+
+- **v0.8.0-pre-registration** (`f29b56c`) — formal verification freeze. 9/9
+  Tamarin lemmas + 1 ProVerif. D4 + D5 + D6 evidence stack frozen at this
+  tag.
+- **v0.8.1-pre-registration** (`8cd540d`) — audit + policy plumbing freeze.
+  Phase ε.1 confirmatory will re-run Phase A + Phase B at this tag.
+- **v0.8.2-pre-registration** (local) — bilateral round-trip freeze.
+  Phase ε.2 confirmatory will re-run Phase A + Phase B at this tag.
+
 ## [0.8.1] — 2026-06-19
 
 Enforcement-side plumbing of the v0.8.0 library modules into the dispatch
@@ -374,6 +446,7 @@ Initial public release.
 - Deterministic test vectors.
 - 111 unit tests.
 
+[0.8.2]: https://github.com/bene-art/pact-passport/releases/tag/v0.8.2-pre-registration
 [0.8.1]: https://github.com/bene-art/pact-passport/releases/tag/v0.8.1-pre-registration
 [0.8.0]: https://github.com/bene-art/pact-passport/releases/tag/v0.8.0-pre-registration
 [0.7.1]: https://github.com/bene-art/pact-passport/releases/tag/v0.7.1
